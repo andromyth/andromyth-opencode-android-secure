@@ -2906,12 +2906,12 @@ public class ChatActivity extends Activity
                             // append the remainder as plain text instead of
                             // dropping all formatting.
                             SpannableStringBuilder sb = new SpannableStringBuilder(
-                                    Markdown.render(full.substring(0, 30000), mres, code -> self.copyText(code, "code block")));
+                                    Markdown.render(full.substring(0, 30000), mres));
                             sb.append("\n…\n");
                             sb.append(full, 30000, full.length());
                             md = sb;
                         } else {
-                            md = Markdown.render(full, mres, code -> self.copyText(code, "code block"));
+                            md = Markdown.render(full, mres);
                         }
                     }
                     catch (Exception e) { md = NoteStrip.trimTail(r.text.toString()); }
@@ -2926,7 +2926,12 @@ public class ChatActivity extends Activity
                         return true;
                     });
                 }
-                if (!blankText) box.addView(body);
+                if (!blankText) {
+                    box.addView(body);
+                    if (!streaming) {
+                        addCodeCopyButtons(box, NoteStrip.trimTail(r.text.toString()));
+                    }
+                }
                 if (r.meta != null && !r.meta.isEmpty()) {
                     TextView meta = text(11, R.color.text_secondary, false);
                     meta.setText(r.meta);
@@ -3359,6 +3364,29 @@ public class ChatActivity extends Activity
             return hint;
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    /** Independent native click targets; never share the selectable response TextView's touch handling. */
+    void addCodeCopyButtons(LinearLayout box, String source) {
+        List<String> blocks = Markdown.codeBlocks(source);
+        for (int i = 0; i < blocks.size(); i++) {
+            final String code = blocks.get(i);
+            TextView copy = text(12, R.color.accent_light, false);
+            copy.setText("⧉  Copy code" + (blocks.size() > 1 ? " " + (i + 1) : ""));
+            copy.setGravity(Gravity.CENTER_VERTICAL);
+            copy.setPadding(dp(4), dp(8), dp(12), dp(8));
+            copy.setClickable(true);
+            copy.setOnClickListener(v -> {
+                Theme.haptic(v);
+                copyText(code, "code block");
+            });
+            Theme.press(copy);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.topMargin = dp(2);
+            box.addView(copy, lp);
         }
     }
 
