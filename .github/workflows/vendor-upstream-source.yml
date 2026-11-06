@@ -1,0 +1,58 @@
+name: Vendor hardened Android source
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/vendor-upstream-source.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vendor-opencode-source
+  cancel-in-progress: false
+
+jobs:
+  vendor:
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[vendored-source]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Fetch pinned upstream and apply security patch
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v0.52.0-p52 https://github.com/turanmertkaraca-bit/opencode-android.git upstream
+          test "$(git -C upstream describe --tags --exact-match)" = "v0.52.0-p52"
+          cp scripts/apply_security_hardening.py upstream/apply_security_hardening.py
+          cd upstream
+          python3 apply_security_hardening.py
+          rm apply_security_hardening.py
+          git diff --check
+
+      - name: Vendor source into this private repository
+        run: |
+          set -euo pipefail
+          rsync -a upstream/ ./ \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='README.md' \
+            --exclude='scripts/apply_security_hardening.py' \
+            --exclude='app/src/main/assets/oc_pkg.bin'
+          test -f settings.gradle
+          test -f app/src/main/java/ai/opencode/app/ServerAuth.java
+          test ! -e keystore/debug.keystore
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Source already matches the pinned, hardened version."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "[vendored-source] Import pinned OpenCode Android source with hardening"
+          git push origin HEAD:main
