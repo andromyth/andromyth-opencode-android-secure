@@ -27,6 +27,7 @@ jobs:
       - name: Fetch pinned upstream and apply security patch
         run: |
           set -euo pipefail
+          rm -rf upstream
           git clone --depth 1 --branch v0.52.0-p52 https://github.com/turanmertkaraca-bit/opencode-android.git upstream
           test "$(git -C upstream describe --tags --exact-match)" = "v0.52.0-p52"
           cp scripts/apply_security_hardening.py upstream/apply_security_hardening.py
@@ -47,6 +48,8 @@ jobs:
           test -f settings.gradle
           test -f app/src/main/java/ai/opencode/app/ServerAuth.java
           test ! -e keystore/debug.keystore
+          rm -rf upstream
+          git rm --cached -f upstream 2>/dev/null || true
           git add -A
           if git diff --cached --quiet; then
             echo "Source already matches the pinned, hardened version."
