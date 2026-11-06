@@ -74,7 +74,14 @@ public final class Markdown {
         return render(src, null);
     }
 
+    public interface CodeBlockCopyListener { void copy(String code); }
+
     public static CharSequence render(String src, MentionResolver mr) {
+        return render(src, mr, null);
+    }
+
+    public static CharSequence render(String src, MentionResolver mr,
+                                      CodeBlockCopyListener codeCopy) {
         if (src == null || src.isEmpty()) return "";
         if (src.length() > 30000) return src; // fast path for huge outputs
 
@@ -95,7 +102,7 @@ public final class Markdown {
                     code.append(lines[i]).append('\n');
                     i++;
                 }
-                appendCodeBlock(b, code.toString());
+                appendCodeBlock(b, code.toString(), codeCopy);
                 continue;
             }
 
@@ -135,13 +142,31 @@ public final class Markdown {
         return 0;
     }
 
-    private static void appendCodeBlock(SpannableStringBuilder b, String code) {
+    private static void appendCodeBlock(SpannableStringBuilder b, String code,
+                                        CodeBlockCopyListener copyListener) {
         int s = b.length();
         b.append(code);
         int e = b.length();
         b.setSpan(new TypefaceSpan("monospace"), s, e, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         b.setSpan(new BackgroundColorSpan(CODE_BG), s, e, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         b.setSpan(new ForegroundColorSpan(CODE_FG), s, e, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        if (copyListener != null) {
+            b.append("\\n");
+            int actionStart = b.length();
+            b.append("⧉  Copy code");
+            int actionEnd = b.length();
+            b.setSpan(new ClickableSpan() {
+                @Override public void onClick(View widget) {
+                    copyListener.copy(code);
+                }
+                @Override public void updateDrawState(TextPaint paint) {
+                    paint.setColor(ACCENT_LINK);
+                    paint.setUnderlineText(false);
+                    paint.setFakeBoldText(true);
+                }
+            }, actionStart, actionEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            b.append("\\n");
+        }
     }
 
     private static void appendInline(SpannableStringBuilder b, String line,
