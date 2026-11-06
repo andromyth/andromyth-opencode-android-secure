@@ -151,7 +151,7 @@ public final class Markdown {
         b.setSpan(new BackgroundColorSpan(CODE_BG), s, e, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         b.setSpan(new ForegroundColorSpan(CODE_FG), s, e, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         if (copyListener != null) {
-            b.append("\\n");
+            b.append("\n");
             int actionStart = b.length();
             b.append("⧉  Copy code");
             int actionEnd = b.length();
@@ -165,7 +165,7 @@ public final class Markdown {
                     paint.setFakeBoldText(true);
                 }
             }, actionStart, actionEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            b.append("\\n");
+            b.append("\n");
         }
     }
 
