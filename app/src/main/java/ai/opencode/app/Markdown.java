@@ -76,7 +76,7 @@ public final class Markdown {
 
     public interface CodeBlockCopyListener { void copy(String code); }
 
-    private static final class CodeCopySpan extends ClickableSpan {
+    private static class CodeCopySpan extends ClickableSpan {
         @Override public void onClick(View widget) {}
     }
 
