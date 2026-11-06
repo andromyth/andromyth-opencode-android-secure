@@ -91,11 +91,17 @@ jobs:
           set -euo pipefail
           mkdir -p upstream/app/src/main/assets
           gh release download --repo turanmertkaraca-bit/opencode-android \
-            --pattern 'opencode-linux-arm64-android.tar.gz' \
-            --output upstream/app/src/main/assets/oc_pkg.bin
-          echo "6384e745af0ee988a6f51e8aa205c0d71b614e0bb100d22c4e535b355d673a7d  upstream/app/src/main/assets/oc_pkg.bin" | sha256sum -c -
-          test "$(od -An -tx1 -N2 upstream/app/src/main/assets/oc_pkg.bin | tr -d ' \n')" = "1f8b"
+            --tag v0.52.0-p52 \
+            --pattern 'opencode-p52-v0.52.0-debug.apk' \
+            --output upstream/upstream-release.apk
+          echo "742fd845f589500d6279faaed38d2b9419bfa365c24ad70a8135f266275ca748  upstream/upstream-release.apk" | sha256sum -c -
+          unzip -l upstream/upstream-release.apk | grep -F 'assets/oc_pkg.bin'
+          unzip -p upstream/upstream-release.apk assets/oc_pkg.bin > upstream/app/src/main/assets/oc_pkg.bin
+          test -s upstream/app/src/main/assets/oc_pkg.bin
+          test "$(od -An -tx1 -N2 upstream/app/src/main/assets/oc_pkg.bin | tr -d ' \\n')" = "1f8b"
+          sha256sum upstream/app/src/main/assets/oc_pkg.bin | tee upstream/native-payload-SHA256SUMS.txt
           ls -lh upstream/app/src/main/assets/oc_pkg.bin
+          rm upstream/upstream-release.apk
 
       - name: Run JVM tests
         working-directory: upstream
