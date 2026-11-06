@@ -139,7 +139,7 @@ public final class Markdown {
             StringBuilder code = new StringBuilder();
             i++;
             while (i < lines.length && !lines[i].trim().startsWith("```")) {
-                code.append(lines[i]).append('\\n');
+                code.append(lines[i]).append('\n');
                 i++;
             }
             out.add(code.toString());
