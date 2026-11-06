@@ -129,7 +129,10 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y clamav clamav-freshclam
-          sudo freshclam
+          # Ubuntu may auto-start the freshclam daemon during package installation;
+          # stop it so the one-shot updater can own the database/log files.
+          sudo systemctl stop clamav-freshclam.service || true
+          sudo freshclam --stdout
           clamscan --infected --alert-broken \
             app/build/outputs/apk/debug/app-debug.apk \
             app/src/main/assets/oc_pkg.bin | tee clamav-scan.txt
