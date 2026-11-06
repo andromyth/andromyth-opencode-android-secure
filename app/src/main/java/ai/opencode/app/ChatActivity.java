@@ -1,0 +1,4938 @@
+package ai.opencode.app;
+
+import android.animation.ObjectAnimator;
+import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Typeface;
+import android.net.Uri;
+import android.widget.ImageView;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.Editable;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.TextWatcher;
+import android.text.style.ForegroundColorSpan;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.BaseAdapter;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ListView;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+/**
+ * P7 — the whole app in one screen. Chat-first like the opencode TUI:
+ *
+ *   ⌘ palette        = the TUI's Ctrl+P (sessions, model, agent, keys, …)
+ *   Build/Plan chip  = the TUI's Tab
+ *   ✦ Thinking cards = reasoning parts, COLLAPSED by default, tap to open
+ *   tool cards       = tool parts, COLLAPSED by default, live status dots,
+ *                      expand to input/output (+patch file lists)
+ *   permission card  = pinned above the composer, Allow once/Always/Deny
+ *   model chip       = EVERY provider/model from /config/providers, search
+ *
+ * No wizard, no setup cards, no gated screens. If the server is down the
+ * transcript keeps working and the status line says what is wrong; ⌘ →
+ * Restart server fixes it. Every render path is try/caught — a bad part
+ * must degrade to a plain line, never crash (the P6 device crash lesson).
+ */
+public class ChatActivity extends Activity
+        implements ServerService.Evt, RunHub.Ui {
+
+    // row kinds — owned by RunHub since P25; re-exported for the render switch
+    static final int K_USER = RunHub.K_USER, K_ASSISTANT = RunHub.K_ASSISTANT,
+            K_REASON = RunHub.K_REASON, K_TOOL = RunHub.K_TOOL, K_SYS = RunHub.K_SYS,
+            K_ERR = RunHub.K_ERR;
+    // P17 row kinds
+    static final int K_LIVE = RunHub.K_LIVE, K_IMAGE = RunHub.K_IMAGE;
+    /** The one live-edit card's stable row key. */
+    private static final String LIVE_KEY = RunHub.LIVE_KEY;
+    /** SAF image-picker request code. */
+    private static final int REQ_IMAGE = 4210;
+
+    // P8: which project sandbox this chat is attached to (from the deck)
+    private String projectName;
+    /** P31: the project folder this chat serves (hibernate-resume anchor). */
+    private String projectPath;
+
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    /**
+     * P10 — was a single-thread executor, which was a deadlock in disguise:
+     * POST /session/{id}/message held its thread until the agent run
+     * finished, so a permission reply queued behind it and never ran.
+     * P25: the message POST itself moved to RunHub's pool — this pool now
+     * serves UI-adjacent async work only (sheets, exports, decodes).
+     */
+    private final ExecutorService ex = Executors.newCachedThreadPool();
+
+    // ---- P25: the view binds the hub's transcript — single source ------
+    // `rows` is a REFERENCE to the hub's live list for the displayed
+    // session; it is re-fetched whenever the hub swaps sessions
+    // (hubReset / onResume). Locking uses the hub's lock so cross-thread
+    // readers (export, copy) stay coherent with the model.
+    private static final Object lock = RunHub.lock();
+    private List<RunHub.Row> rows = RunHub.rows();
+    private boolean pinnedBottom = true;
+
+    // P48 — the pin must never fight its own scrolling. The field report:
+    // streaming tokens made the chat "go up and down". Diagnosis: the
+    // scroll-changed listener fired for OUR programmatic scrolls too, and
+    // between a paint (content grows) and the corrective scroll the view
+    // reads as "not at bottom" — so the pin flipped off, the drift began,
+    // the next correction re-pinned, and the list oscillated. Two rails:
+    //   • progScroll — a programmatic scroll in flight; the listener
+    //     ignores every scroll change it causes. Our scrolls never move
+    //     the pin; only the USER's hand does.
+    //   • lastScrollY — an upward drag (scrollY decreasing) ALWAYS
+    //     unpins, even one pixel of it; downward motion re-pins only at
+    //     the true bottom. Dragging up can never be yanked back down.
+    private boolean progScroll;
+    private int lastScrollY;
+
+    private RunHub.Row rowByKey(String key) {
+        Integer i = key == null ? null : RunHub.idx().get(key);
+        List<RunHub.Row> rs = RunHub.rows();
+        return (i == null || i >= rs.size()) ? null : rs.get(i);
+    }
+
+    private LinearLayout list;
+    private ScrollView scroll;
+    private TextView tvTitle, tvSub, tvStatus, chipMode, chipModel, btnSend;
+    private TextView tvSpend;               // P14: dedicated session-spend pill
+    private EditText input;
+    private LinearLayout permSlot;
+    private LinearLayout qSlot;       // P50: pending question asks (pinned)
+    // P9: hero empty state + in-place view cache for smooth streaming
+    private LinearLayout emptyHero, suggestBox;
+    private TextView heroTitle, heroSub;    // P45: the time-of-day greeting
+    private TextView btnSessions;
+    private final Map<String, View> viewByKey = new HashMap<>();
+    private final Map<String, TextView> bodyByKey = new HashMap<>();
+    private final Map<String, TextView> metaByKey = new HashMap<>();
+    private final Handler smoother = new Handler(Looper.getMainLooper());
+    private boolean smootherRunning;
+    /** P52: above this tail length the ticker repaints on a 48 ms cadence
+     *  instead of 24 ms (see tick) — the pacer still owns the reveal rate. */
+    private static final int STREAM_LONG_CHARS = 24000;
+    /** P52: chars of {@link RunHub.Row#text} currently in each streaming
+     *  body (the caret excluded). Lets paintStreaming APPEND the newly
+     *  revealed delta to the body's Editable instead of re-copying the
+     *  whole answer every tick (O(n²) → O(n) on long replies). Cleared
+     *  wherever the view maps are (renderAll/hubReset) and on every row
+     *  rebuild. */
+    private final Map<String, Integer> paintPrefix = new HashMap<>();
+    /** P43: one pacer per streaming row — the arrival-rate reveal that
+     *  turns provider bursts into a continuous glide (StreamPacer).
+     *  P48: the profile follows the row kind — THINKING rows reveal on
+     *  the calm thought profile, everything else on the answer glide. */
+    private final Map<String, StreamPacer> pacerByKey = new HashMap<>();
+
+    /** P43: pacer for a row, with a bounded map (long sessions must not
+     *  accumulate entries). P48: kind-aware — a row that flips between
+     *  reasoning and answer gets a fresh pacer of the right profile. */
+    private StreamPacer pacerFor(RunHub.Row r) {
+        String key = r.key == null ? "" : r.key;
+        boolean thinking = r.kind == K_REASON;
+        StreamPacer p = pacerByKey.get(key);
+        if (p == null || p.thinkingRow != thinking) {
+            if (pacerByKey.size() > 256) pacerByKey.clear();
+            p = thinking ? StreamPacer.forThinking() : StreamPacer.forAnswer();
+            pacerByKey.put(key, p);
+        }
+        return p;
+    }
+
+    /** P43: the cache-beat clock — a 20 s poll while this screen is
+     *  open. RunHub.cacheBeatTick does the whole decision (idle past 4
+     *  quiet minutes + policy rails) and fires the beat when earned;
+     *  the poll itself is one map read, no IO. */
+    private final Handler beatClock = new Handler(Looper.getMainLooper());
+    private boolean beatClockRunning;
+    private final Runnable beatTick = new Runnable() {
+        @Override public void run() {
+            Throwable t = Resilience.guard(() -> RunHub.cacheBeatTick());
+            if (t != null) contained("cache beat", t);
+            if (beatClockRunning) beatClock.postDelayed(this, 20_000);
+        }
+    };
+
+    private void startBeatClock() {
+        if (beatClockRunning) return;
+        beatClockRunning = true;
+        beatClock.postDelayed(beatTick, 20_000);
+    }
+
+    private void stopBeatClock() {
+        beatClockRunning = false;
+        beatClock.removeCallbacks(beatTick);
+    }
+    // P8 polish
+    private View veil;
+    private View veilDot;                   // P17: direct handle for the pulse
+    private ObjectAnimator veilPulse;       // P17: CANCELED when the veil hides —
+    private TextView veilElapsed;           // P42: live "N s" line — the static
+    //                                          "≈ 5 s" read as a lie on slow
+    //                                          boots and frozen UI
+    private long veilStartMs;
+    private final Runnable veilTicker = new Runnable() {
+        public void run() {
+            if (veilElapsed == null || veil == null
+                    || veil.getVisibility() != View.VISIBLE) return;
+            long s = Math.max(0, (System.currentTimeMillis() - veilStartMs) / 1000);
+            veilElapsed.setText("elapsed · " + s + " s");
+            ui.postDelayed(this, 1000);
+        }
+    };
+    //                                          the P16 code pulsed the veil dot
+    //                                          with an INFINITE animator while
+    //                                          the veil sat GONE 24/7: real idle
+    //                                          burn on the main screen.
+    private LinearLayout typing;
+    private LinearLayout liveSlot;   // P26: pinned live-tree footer (always visible while a run works)
+    private TextView scrollPill;
+    private boolean pillShown;
+    /** P-fix: the pill's 450 ms bracket reset, tracked so onPause can
+     *  cancel it (the anonymous lambda used to outlive the screen). */
+    private final Runnable pillProgReset = () -> {
+        progScroll = false;
+        lastScrollY = scroll == null ? 0 : scroll.getScrollY();
+    };
+    private final List<ObjectAnimator> typingAnims = new ArrayList<>();
+
+    // ---- P17/P25: live edit feed — STATE lives in RunHub, the VIEW here
+    // renders it. The DirWatcher runs while a run is active (hub-owned),
+    // so the shower keeps recording with the chat closed. The view keeps
+    // only the tree's dir states (its own expand/collapse memory).
+    // P26: the card is the PINNED FOOTER (never a transcript row), the
+    // pulsing live dot is GONE — a static dot says the same thing
+    // without flashing (field: "remove the flashing live symbol").
+    /** P25 tree: user-decided dir expand/collapse (null = auto: follow
+     *  the newest event's branch). Bounded; cleared on session resets. */
+    private final java.util.Map<String, Boolean> dirState = new java.util.HashMap<>();
+
+    // ---- P17: vision — P29: the messenger-style ATTACHMENT TRAY ---------
+    // One picked image = one downscaled cache file + its decoded dims
+    // (for the cost estimate) + its tray thumb. Send ships them ALL in
+    // one message (RunHub.sendWithAttachments).
+    private TextView btnVision;
+    private LinearLayout attachSlot;        // tray row inside the composer
+    private View attachScroll;
+    private TextView costHint;              // the next-send price line
+    /** One pending attachment: file + decoded dims. */
+    private static final class PendingImg {
+        final File file;
+        final int w, h;
+        PendingImg(File file, int w, int h) {
+            this.file = file; this.w = w; this.h = h;
+        }
+    }
+    private final List<PendingImg> pendingAttach = new ArrayList<>();
+    private final Map<String, Bitmap> attachThumbs = new HashMap<>();
+
+    // ---- P29: the model-sheet idiot guard. The field report: a tap
+    // starts the catalog load with NO feedback, so a second tap "opens the
+    // popup twice". One AtomicBoolean = only ONE fetch/one dialog ever in
+    // flight; taps during the load pulse the chip instead of queueing.
+    private final java.util.concurrent.atomic.AtomicBoolean modelsInFlight =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+    private ObjectAnimator chipPulse;
+
+    // ---------------------------------------------------------- lifecycle
+
+    @Override
+    protected void onCreate(Bundle b) {
+        super.onCreate(b);
+        setContentView(R.layout.activity_chat);
+        Theme.window(this);              // P31: palette owns the window + dialogs
+        list = findViewById(R.id.list);
+        // P42 keyboard fix: the EditText must never be the activity's
+        // INITIAL focus target — on session open the IME used to slide up
+        // over a chat the user had not touched yet. The list takes initial
+        // focus instead; tapping the input still focuses it (and only
+        // that opens the keyboard, which is exactly the field ask).
+        list.setFocusable(true);
+        list.setFocusableInTouchMode(true);
+        list.setDescendantFocusability(ViewGroup.FOCUS_BEFORE_DESCENDANTS);
+        scroll = findViewById(R.id.scroll);
+        liveSlot = findViewById(R.id.liveSlot);
+        tvTitle = findViewById(R.id.tvTitle);
+        tvSub = findViewById(R.id.tvSub);
+        tvStatus = findViewById(R.id.tvStatus);
+        tvSpend = findViewById(R.id.tvSpend);
+        chipMode = findViewById(R.id.chipMode);
+        chipModel = findViewById(R.id.chipModel);
+        btnSend = findViewById(R.id.btnSend);
+        input = findViewById(R.id.input);
+        permSlot = findViewById(R.id.permSlot);
+        qSlot = findViewById(R.id.qSlot);   // P50: question card slot
+        applyWideLayout();                   // P16 DeX: centered column on wide windows
+
+        // P8: project context from the deck (name shown in the subtitle;
+        // path is a safety net — switch sandbox if Home somehow didn't,
+        // but never during an in-flight restart Home already triggered).
+        Intent in = getIntent();
+        if (in != null) {
+            projectName = in.getStringExtra("project");
+            String path = in.getStringExtra("path");
+            projectPath = path;
+            if (path != null && Projects.validDir(path)
+                    && !ServerService.pendingRestart()
+                    && ServerService.needsSwitch(new File(path))) {
+                ServerService.switchTo(this, new File(path));
+            }
+            // P34: the Settings → Essentials → Interactive canvas hand-off
+            // lands here pre-typed (the ask sheet opens once the screen is up)
+            final String ask = in.getStringExtra("askCanvas");
+            if (ask != null) ui.postDelayed(() -> {
+                if (!isFinishing() && !isDestroyed()) canvasDialog(ask);
+            }, 350);
+        }
+
+        View btnPaletteV = findViewById(R.id.btnPalette);
+        btnPaletteV.setOnClickListener(v -> palette());
+        Theme.press(btnPaletteV);        // P52: every header control reacts
+        // P10: visible back affordance — chat → project deck. P34: ALWAYS.
+        // The update-launch path boots straight into the last chat and
+        // finishes the splash, which used to make the chat the task root:
+        // finish() then had nothing beneath it and BOTH backs closed the
+        // whole app (the field report). The pure back rule sends the deck
+        // explicitly in exactly that case.
+        View btnBackV = findViewById(R.id.btnBack);
+        btnBackV.setOnClickListener(v -> {
+            Theme.pop(v);
+            leaveToDeck();
+        });
+        Theme.press(btnBackV);
+        btnSessions = findViewById(R.id.btnSessions);
+        if (btnSessions != null) {
+            btnSessions.setOnClickListener(v -> {
+                Theme.haptic(v);
+                sessionsSheet();
+            });
+            Theme.press(btnSessions);
+        }
+        emptyHero = findViewById(R.id.emptyHero);
+        suggestBox = findViewById(R.id.suggestBox);
+        // P45: the Claude-Android empty state — a time-of-day greeting
+        // over the one calm question, computed once per chat open.
+        try {
+            java.util.Calendar cal = java.util.Calendar.getInstance();
+            int h = cal.get(java.util.Calendar.HOUR_OF_DAY);
+            String part = h < 5 ? "evening" : h < 12 ? "morning"
+                    : h < 18 ? "afternoon" : "evening";
+            heroTitle = (TextView) findViewById(R.id.heroTitle);
+            heroSub = (TextView) findViewById(R.id.heroSub);
+            heroTitle.setText("Good " + part);
+            heroSub.setText("How can I help you today?");
+        } catch (Exception ignored) {}
+        // P45: the unified composer pill — ONE raised surface built from
+        // the LIVE palette tokens (the XML drawable's frozen colors can
+        // never follow a palette switch; this can). Radius 26, hairline
+        // rim — the Claude-Android composer on whatever face is active.
+        try {
+            View cc = findViewById(R.id.composerCard);
+            if (cc != null) cc.setBackground(Theme.composerWell(this));
+        } catch (Exception ignored) {}
+        btnVision = findViewById(R.id.btnVision);
+        if (btnVision != null) {
+            btnVision.setOnClickListener(v -> {
+                Theme.haptic(v);
+                pickImage();
+            });
+            Theme.press(btnVision);
+        }
+        attachScroll = findViewById(R.id.attachScroll);
+        attachSlot = findViewById(R.id.attachSlot);
+        costHint = findViewById(R.id.costHint);
+        chipMode.setOnClickListener(v -> {
+            Theme.haptic(v);
+            toggleMode();
+        });
+        chipModel.setOnClickListener(v -> {
+            Theme.haptic(v);
+            modelSheet();
+        });
+        if (tvSpend != null) tvSpend.setOnClickListener(v -> {
+            Theme.haptic(v);
+            spendPopover();
+        });   // P18
+        btnSend.setOnClickListener(v -> {
+            v.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY);
+            if (RunHub.busyFor(RunHub.displayedSession())) {
+                RunHub.abort();              // P25: the ONLY abort path (P31: this chat's run)
+            } else {
+                String q = input.getText().toString().trim();
+                if (q.isEmpty() && pendingAttach.isEmpty()) return;
+                Theme.pop(btnSend);          // P8 micro-anim: the send button springs
+                if (!pendingAttach.isEmpty()) {
+                    List<PendingImg> ship = new ArrayList<>(pendingAttach);
+                    List<File> files = new ArrayList<>();
+                    for (PendingImg p : ship) files.add(p.file);
+                    clearAttach(false);      // tray clears; files live on for the hub
+                    input.setText("");
+                    RunHub.sendWithAttachments(files, q);   // P29: ONE message, N images
+                } else {
+                    input.setText("");
+                    RunHub.send(q);          // hub-owned: the run outlives this screen
+                }
+            }
+        });
+        // P29: the price line tracks the message as it is typed.
+        input.addTextChangedListener(new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int b2, int c) {}
+            public void onTextChanged(CharSequence s, int a, int b2, int c) {}
+            public void afterTextChanged(Editable s) { syncCostHint(); }
+        });
+        scroll.getViewTreeObserver().addOnScrollChangedListener(() -> {
+            // P49: keep the base CURRENT even for our own bracketed scrolls
+            // (the pill's 450 ms flight on a very long list can outlast the
+            // bracket — a stale base read the next real event as a huge
+            // upward drag and flicked the pin off right after landing: the
+            // "↓ latest" pill flashed for a frame after every long glide).
+            // P48: our own scrolls (scrollToEnd, the pill's glide home)
+            // still never MOVE the pin — only the user's hand does.
+            int prev = lastScrollY;
+            int y = scroll.getScrollY();
+            lastScrollY = y;
+            if (progScroll) return;
+            pinnedBottom = pinDecision(y, prev, atBottom());
+            syncPill();
+        });
+
+        // P49: the re-anchor. The IME (and split-screen / DeX resizes)
+        // shrinks this ScrollView via adjustResize; without a re-anchor
+        // the scroll position stays where it was and the newest rows sit
+        // HIDDEN BEHIND the keyboard until the next paint — the glitch
+        // the field showed every time the keyboard came up. When the
+        // viewport
+        // height changes and we were pinned, glue to the bottom in the
+        // same breath. The scroll's own height only changes for real
+        // window-level resizes (row growth changes the LIST's height, not
+        // the viewport), so this fires exactly for the events that need it.
+        scroll.addOnLayoutChangeListener((v, lf, tf, rf, bf, olf, otf, orf, obf) -> {
+            if ((bf - tf) != (obf - otf) && pinnedBottom
+                    && !isFinishing() && !isDestroyed()) {
+                scroll.post(this::scrollToEnd);
+            }
+        });
+
+        // P48: a finger on the list owns the scroll immediately — cancel
+        // any programmatic bracket (pill glide, stream correction) so a
+        // drag that starts mid-flight is read as the user's hand.
+        scroll.setOnTouchListener((v, ev) -> {
+            if (ev.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) {
+                progScroll = false;
+                lastScrollY = scroll.getScrollY();
+            }
+            return false;   // never consume — ScrollView keeps its behavior
+        });
+
+        buildVeil();
+        buildTyping();
+        buildPill();
+        buildSuggestions();
+        applyWideLayout();   // P-fix: re-apply after typing built its padding
+
+        refreshChips();
+        refreshServerUi();
+        renderAll();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (Theme.syncIfNeeded(this)) return;   // P32: palette changed → recreating
+        ServerService.subscribe(this);
+        int st = ServerService.getState();
+        if ((st == ServerService.ST_IDLE || st == ServerService.ST_STOPPED
+                || st == ServerService.ST_EXITED) && !ServerService.pendingRestart()) {
+            if (Binaries.binaryReady(this)) {
+                try {
+                    startForegroundService(new Intent(this, ServerService.class));
+                } catch (Exception ignored) {}
+            }
+        }
+        // P25: bind to the live run state. The hub consumed every event
+        // while this screen was away; re-pull the session from the server
+        // API as the belt to that brace (never re-POSTs, never restarts
+        // a healthy stream), restore the interrupted-run note, render.
+        RunHub.bindUi(this);
+        rows = RunHub.rows();
+        // P48: whatever streamed while this screen was away is already old
+        // news — land it SETTLED (full text, one repaint), exactly like the
+        // server UIs. Nothing that arrived in the background may re-animate
+        // or replay its glide; only deltas that arrive WHILE WATCHING glide.
+        snapArrived();
+        startBeatClock();                    // P43: cache-beat clock (screen-open only)
+        String interrupted = RunHub.consumeInterruptedNote();
+        // P26: reconcile is now the ONLY resume path. The old empty-start
+        // branch called loadSession, which SWAPS the transcript for a fresh
+        // Tx and replays — when the pull raced the sandbox boot it died
+        // silently and the screen sat empty/"loading" until the NEXT
+        // open. reconcileOnBind upserts in place (works identically for
+        // the empty cold start), never wipes, and plants replayNeeded so
+        // the ST_HEALTHY flip below re-runs it the moment the server
+        // answers. The chat updates every time, never trails behind.
+        if (RunHub.sessionId() != null) {
+            RunHub.reconcileOnBind();
+            // P50: an ask may predate the screen (it fired while the app
+            // was dead) — backfill the pending-question store over HTTP,
+            // then paint whatever is queued NOW.
+            RunHub.fetchPendingQuestions(RunHub.sessionId());
+        }
+        // the note lands AFTER the (re)load — the transcript swap must
+        // never wipe it
+        if (interrupted != null) RunHub.sys(interrupted);
+        checkPermissionQueue();
+        checkQuestionQueue();
+        refreshServerUi();
+        refreshChips();
+        // P26: paint the CURRENT busy state on every bind — the ■ stop
+        // button, the status line, the typing dots AND the live footer
+        // all hang off this one call (they used to initialize only on a
+        // busy CHANGE, so re-entering mid-run showed a stale ↑ button).
+        applyBusyUi(RunHub.busyFor(RunHub.displayedSession()));
+        syncBackgroundRunsNote();
+        // P16: returning from API keys with the model sheet open → refresh
+        // the rows IN PLACE, so the provider whose key was just added goes
+        // bright/ready without closing and reopening the picker.
+        if (keysFromSheet) {
+            keysFromSheet = false;
+            if (modelDlg != null && modelDlg.showing() && !isFinishing()
+                    && !isDestroyed()) {
+                ex.execute(() -> {
+                    Throwable t = Resilience.guard(() -> {
+                        List<Models.Prov> fresh = Models.fetch(ChatActivity.this);
+                        ui.post(() -> {
+                            if (modelDlg == null || !modelDlg.showing()) return;
+                            sheetProvs = fresh;
+                            if (sheetRefill != null) sheetRefill.run();
+                            Toast.makeText(ChatActivity.this,
+                                    "providers refreshed — your key is in",
+                                    Toast.LENGTH_SHORT).show();
+                        });
+                    });
+                    if (t != null) Trail.record(ChatActivity.this, "provider refresh", t);
+                });
+            }
+        }
+    }
+
+    /** P16 DeX: hardware-keyboard shortcuts (desktop-opencode muscle
+     *  memory): Ctrl+M models · Ctrl+K palette · Ctrl+J sessions. */
+    @Override
+    public boolean onKeyUp(int keyCode, android.view.KeyEvent event) {
+        if (event != null && event.isCtrlPressed() && !event.isShiftPressed()
+                && !event.isAltPressed()) {
+            switch (keyCode) {
+                case android.view.KeyEvent.KEYCODE_M: modelSheet(); return true;
+                case android.view.KeyEvent.KEYCODE_K: palette(); return true;
+                case android.view.KeyEvent.KEYCODE_J: sessionsSheet(); return true;
+                default: break;
+            }
+        }
+        return super.onKeyUp(keyCode, event);
+    }
+
+    @Override
+    protected void onPause() {
+        // P-fix: subscribe() lives in onResume and the listener list has
+        // no dedupe, so unsubscribe here too — otherwise every pause/
+        // resume cycle appends another reference that onDestroy can't
+        // clear. (onResume re-syncs all server state on return.)
+        ServerService.unsubscribe(this);
+        RunHub.unbindUi(this);
+        stopBeatClock();                     // P43: beats live only on the open screen
+        // P42 keyboard fix, second half: drop input focus on pause so a
+        // return to the chat (or the renderAll guard re-grabbing focus
+        // after reconcile) can never re-open the IME the user did not
+        // ask for. Mid-stream typing is unaffected — that path re-grabs
+        // only while the input STILL holds focus.
+        try { if (input != null) input.clearFocus(); } catch (Exception ignored) {}
+        // P31: the hibernate-resume anchor — "the user was HERE". Stamped
+        // on pause so the last surface the user left wins; MainActivity
+        // reads it after an idle hibernation (or any cold open) and drops
+        // the user straight back into this chat.
+        try {
+            if (projectPath != null && !projectPath.isEmpty()) {
+                getSharedPreferences("oc", MODE_PRIVATE).edit()
+                        .putString(Resume.KEY,
+                                Resume.chatValue(projectName, projectPath)).apply();
+            }
+        } catch (Exception ignored) {}
+        // P15: drop pending paint work with the unbind — the flush would
+        // fire into a detached view tree on return (harmless but wasteful).
+        ui.removeCallbacks(flushPaints);
+        // P-fix: the deferred live-card refresh and the pill's bracket
+        // reset are screen-scoped — drop them with the other posts.
+        ui.removeCallbacks(deferredLiveUpdate);
+        if (scroll != null) scroll.removeCallbacks(pillProgReset);
+        progScroll = false;
+        // P42-check: the veil ticker re-posts itself every second while
+        // the veil is VISIBLE — leave during a boot and it holds the
+        // finished activity (and its view tree) forever, waking the CPU.
+        // The INFINITE pulses are the same class of leak; FilesActivity
+        // already cancels its pulse on pause — parity here.
+        ui.removeCallbacks(veilTicker);
+        if (veilPulse != null) { veilPulse.cancel(); veilPulse = null; }
+        if (chipPulse != null) {
+            chipPulse.cancel();
+            chipPulse = null;
+            if (chipModel != null) chipModel.setAlpha(1f);
+        }
+        paintScheduled = false;
+        dirtyRows.clear();
+        // P49: pending markdown finalizes die with the screen — nothing
+        // fires into a detached view tree (the P48 ticker lesson, kept).
+        cancelFinalizes();
+        // P48: the stream ticker is a SCREEN citizen, not a process one.
+        // The run itself lives in RunHub (deltas keep landing while the
+        // screen is away — background sessions were and stay safe); but
+        // painting into a detached view tree every 24 ms is battery burn
+        // and a mid-glide replay on return. Stop the ticker here; onResume
+        // snaps everything that arrived to its settled text.
+        smoother.removeCallbacks(tick);
+        smootherRunning = false;
+        // P25: that is ALL. The run, the SSE feed, the transcript, the
+        // edit watcher — all live in RunHub now. Leaving to the deck keeps
+        // the run streaming; nothing here can abort it (only ■ can).
+        super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        // P-fix: ServerService's listener list is static and has no
+        // dedupe — every activity that subscribes MUST unsubscribe, or a
+        // destroyed chat (and its whole view tree) is retained and
+        // refreshed forever. Mirrors HomeActivity/MainActivity/Settings.
+        ServerService.unsubscribe(this);
+        if (ex != null) ex.shutdownNow();
+        super.onDestroy();
+    }
+
+    /** P26: back takes the same journey as the ‹ button — chat → project
+     *  deck (the app never dumps the user on the launcher mid-journey).
+     *  P34: true at EVERY depth — when this chat is the task root (the
+     *  update-launch restore), the deck is opened explicitly instead of
+     *  finish() exiting the app. Pure decision in Resume.backRule, pinned
+     *  by P34Test. */
+    @Override
+    public void onBackPressed() {
+        leaveToDeck();
+    }
+
+    /** The one back journey: reveal the deck below, or open it when this
+     *  screen is all the task holds. */
+    private void leaveToDeck() {
+        try {
+            if (Resume.backRule(isTaskRoot()) == Resume.BACK_OPEN_DECK) {
+                startActivity(new Intent(this, HomeActivity.class));
+            }
+        } catch (Exception ignored) {
+            // a broken deck open must never trap the user — finish anyway
+        }
+        finish();
+        overridePendingTransition(R.anim.fade_in, R.anim.slide_out_right);
+    }
+
+    // ------------------------------------------------ P25: RunHub.Ui
+    // The view contract: the hub mutates its model (any thread → main),
+ // the view paints. Every callback arrives on the main thread.
+
+    @Override public void hubRow(String key) {
+        RunHub.Row r = key == null ? null : rowByKey(key);
+        if (r != null) requestPaint(r);
+    }
+
+    @Override public void hubBusy(boolean b) {
+        // P31: b = ANY run; the chat's own UI (■ button, dots) follows the
+        // DISPLAYED session's run — a background chat must not turn this
+        // screen's send button into a stop button.
+        applyBusyUi(RunHub.busyFor(RunHub.displayedSession()));
+        syncBackgroundRunsNote();
+    }
+
+    @Override public void hubSpend() {
+        ui.post(() -> {
+            refreshServerUi();
+            syncCostHint();        // P29: the price line tracks the live ctx depth
+        });
+    }
+
+    @Override public void hubTitle() {
+        ui.post(() -> {
+            String t = RunHub.sessionTitle();
+            if (t != null && !t.isEmpty()) tvTitle.setText(t);
+            refreshChips();
+        });
+    }
+
+    @Override public void hubPerms() {
+        ui.post(this::checkPermissionQueue);
+    }
+
+    @Override public void hubQuestions() {
+        // P50: the question tool / plan approval — the pinned card follows
+        // the hub store on every asked/replied/rejected event.
+        ui.post(this::checkQuestionQueue);
+    }
+
+    @Override public void hubLive() {
+        // P26: the live card is the pinned FOOTER now — repaint it directly
+        // (already debounced upstream: DirWatcher 280 ms + peek 120 ms).
+        syncLiveFooter();
+    }
+
+    /** The transcript was replaced (session switch / model trim): rebuild
+     *  everything once. Also re-syncs the `rows` reference. */
+    @Override public void hubReset() {
+        ui.post(() -> {
+            rows = RunHub.rows();
+            dirtyRows.clear();
+            paintScheduled = false;
+            ui.removeCallbacks(flushPaints);
+            cancelFinalizes();               // P49: the transcript is being replaced
+            liveStreamViews.clear();         // P49: the view maps are going too
+            paintPrefix.clear();             // P52: …and the caret-stage cache
+            dirState.clear();
+            viewByKey.clear();
+            bodyByKey.clear();
+            metaByKey.clear();
+            pinnedBottom = true;
+            renderAll();
+            syncEmpty();
+        });
+    }
+
+    /** P29: SAF image pick — ClipData carries EVERY picked photo; the
+     *  single-Uri fallback stays for pickers that ignore multi-select.
+     *  (No permission needed — the picker grants temporary read access.) */
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_IMAGE || resultCode != RESULT_OK || data == null) return;
+        ClipData clip = data.getClipData();
+        if (clip != null && clip.getItemCount() > 0) {
+            for (int i = 0; i < clip.getItemCount(); i++) {
+                Uri u = clip.getItemAt(i).getUri();
+                if (u != null) addAttachFromUri(u);
+            }
+        } else if (data.getData() != null) {
+            addAttachFromUri(data.getData());
+        }
+    }
+
+    // --------------------------------------------------- P16 DeX / wide
+
+    /** Desktop (DeX) comfort: on wide windows the transcript, permission
+     *  slot and composer collapse to a centered ~720 dp column — the
+     *  desktop-opencode silhouette instead of a stretched phone app.
+     *  Re-applied on every window resize (configChanges handled). */
+    private void applyWideLayout() {
+        android.content.res.Configuration cfg = getResources().getConfiguration();
+        int wdp = cfg.screenWidthDp;
+        if (wdp <= 0) wdp = getResources().getDisplayMetrics().widthPixels;
+        boolean wide = wdp >= 600;
+        int inset = wide ? Theme.dp(this,
+                Math.min(200, Math.max(14, (wdp - 720) / 2 + 14))) : 0;
+        // P52: ONE content inset for every column — transcript, composer,
+        // pinned cards (permission/question/live), status and typing lines
+        // all share the same left/right edge. The old ad-hoc 10/12/14/16/18
+        // mix made the transcript rows, pinned cards and composer look
+        // like they belonged to different screens (the "rushed" feel).
+        // Wide windows keep the centered ~720dp column; narrow uses the
+        // shared 16dp token (step 5).
+        int side = inset > 0 ? inset : Theme.space(this, 5);
+        // P42-check: the list bottom holds the project's own ≥14dp
+        // clipping floor (16dp here).
+        if (list != null) list.setPadding(side, dp(14), side, dp(14));
+        View composer = findViewById(R.id.composerBar);
+        if (composer != null) composer.setPadding(side, dp(8), side, dp(10));
+        if (permSlot != null) permSlot.setPadding(side, 0, side, 0);
+        // P-fix: the remaining pinned slots follow the same centered
+        // column on wide windows (they used to stretch edge-to-edge).
+        if (liveSlot != null) liveSlot.setPadding(side, dp(2), side, 0);
+        if (qSlot != null) qSlot.setPadding(side, 0, side, 0);
+        if (typing != null) typing.setPadding(side, dp(2), side, dp(2));
+        if (tvStatus != null) tvStatus.setPadding(side, dp(4), side, dp(2));
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newCfg) {
+        super.onConfigurationChanged(newCfg);
+        ui.post(this::applyWideLayout);   // DeX window resizes land here
+    }
+
+    private boolean atBottom() {
+        int off = scroll.getScrollY() + scroll.getHeight() - list.getHeight();
+        return off > -80;
+    }
+
+    /** P49: the pin decision, pure — the listener stays wiring and the
+     *  suite pins the policy. An upward move ALWAYS unpins; downward (or
+     *  still) re-pins only at the true bottom. Identical contract to the
+     *  P48 inline logic, now visible to tests. */
+    static boolean pinDecision(int y, int prevY, boolean atBottom) {
+        if (y < prevY - 1) return false;
+        return atBottom;
+    }
+
+    private void autoscroll() {
+        if (pinnedBottom) scroll.post(this::scrollToEnd);
+    }
+
+    /** P21: focus-free scroll to the end of the list. ScrollView's
+     *  fullScroll() runs the focus search and can MOVE focus into the
+     *  message list — selectable rows are focusable — so mid-run the
+     *  keyboard kept detaching from the chat box (P20 field report:
+     *  "keeps making the keyboard unfocus from the chatbox"). Identical
+     *  scroll position, zero focus side effects. */
+    private void scrollToEnd() {
+        View c = scroll.getChildAt(0);
+        int bottom = c == null ? scroll.getHeight() : c.getHeight();
+        // P48: bracket the jump — the scrollChanged listener must read
+        // this as OUR scroll, not as the user drifting off the bottom.
+        progScroll = true;
+        try {
+            scroll.scrollTo(0, Math.max(0, bottom - scroll.getHeight()));
+            lastScrollY = scroll.getScrollY();
+        } finally {
+            scroll.post(() -> progScroll = false);
+        }
+    }
+
+    // ------------------------------------------------- P9 stream smoother
+
+    /**
+     * Token-by-token feel: SSE deltas land in RunHub.Row.text (the target) and a
+     * 24 ms ticker paints a few more chars into the row's TextView with a
+     * caret — plain text while streaming (cheap), full markdown ONCE when
+     * the part catches up. Adaptive step = remaining/8 + 3 chars, so short
+     * replies land instantly and long ones glide.
+     *
+     * P20: the ticker now also drives THINKING rows — the assistant text
+     * already glided, but reasoning rows painted in raw SSE bursts; the
+     * collapsed card grows a live one-line ticker of the freshest
+     * thinking, and an open card streams its body with the caret.
+     */
+    private void startSmoother() {
+        if (smootherRunning) return;
+        smootherRunning = true;
+        smoother.postDelayed(tick, 24);
+    }
+
+    // --------------------------------------------- P15 paint coalescing
+
+    /**
+     * The "not snappy" killer, caught red-handed: one busy agent turn
+     * fires dozens of SSE merges per second, and each merge called
+     * touchView → removeViewAt+addView → a FULL LinearLayout relayout of
+     * every row — including the huge tool blocks. Long commands made the
+     * chat visibly fight the user.
+     *
+     * Fix: merge-path repaints are COALESCED. requestPaint() marks the row
+     * dirty and schedules ONE flush 80 ms out; the flush paints each dirty
+     * row once. Bursts of N events now cost one relayout, not N. Direct
+     * touchView stays for what the user does (send, expand/collapse, sys/err
+     * rows) — those must feel instant, and they are rare.
+     */
+    private static final long PAINT_THROTTLE_MS = 80;
+    private final java.util.LinkedHashSet<RunHub.Row> dirtyRows = new java.util.LinkedHashSet<>();
+    private boolean paintScheduled;
+
+    private final Runnable flushPaints = this::flushPaintsNow;
+
+    void requestPaint(RunHub.Row r) {           // package-private: P24 test seam
+        dirtyRows.add(r);
+        if (!paintScheduled) {
+            paintScheduled = true;
+            ui.postDelayed(flushPaints, PAINT_THROTTLE_MS);
+        }
+    }
+
+    /** P24: paint exactly one row — the fault-isolation seam. Package-
+     *  private so the Robolectric suite can poison it and prove the
+     *  transcript survives a row that cannot paint. */
+    void paintRowOnce(RunHub.Row r) { touchView(r); }
+
+    /** P24 field lesson ("doesn't crash but it still won't work"): P23's
+     *  single guard around the WHOLE batch meant ONE poisoned row aborted
+     *  every row painted after it — and the feed re-dirties that row on
+     *  every delta/file event, so every flush re-failed: a banner wall
+     *  plus a frozen transcript, with the run itself still healthy. From
+     *  P24 on each row fails ALONE: batch continues, repeat offenders are
+     *  quarantined into a can't-fail fallback line. */
+    void flushPaintsNow() {              // package-private: test seam
+        guarded("paint flush", () -> {
+            paintScheduled = false;
+            if (dirtyRows.isEmpty()) return;
+            java.util.ArrayList<RunHub.Row> batch = new java.util.ArrayList<>(dirtyRows);
+            dirtyRows.clear();
+            List<RunHub.Row> rs = RunHub.rows();
+            java.util.Map<String, Integer> idx = RunHub.idx();
+            for (RunHub.Row r : batch) {
+                Integer i = r.key == null ? null : idx.get(r.key);
+                if (i == null || i >= rs.size() || rs.get(i) != r) continue;
+                if (r.key != null && quarantined.contains(r.key)) continue;
+                final RunHub.Row fr = r;
+                Throwable t = Resilience.guard(() -> paintRowOnce(fr));
+                if (t == null) {
+                    if (r.key != null) paintFails.remove(r.key);  // second chance restored
+                } else {
+                    noteRowPaintFail(fr, t);
+                }
+            }
+            autoscroll();
+        });
+    }
+
+    /** P24: one row's paint failed. Count it; after
+     *  {@link Resilience#paintFailQuarantineAfter()} failures quarantine
+     *  the row — content swapped for the bounded fallback line that
+     *  cannot fail. The part degrades VISIBLY; the chat keeps flowing.
+     *  Never throws (it runs inside containment contexts). */
+    private void noteRowPaintFail(RunHub.Row r, Throwable t) {
+        try {
+            if (r.key == null) return;      // unkeyed rows: trail only
+            String k = r.key;
+            Trail.record(this, "paint row " + k, t);
+            // P26 long-run caps: a month of flaky rows must not grow the
+            // bookkeeping maps forever — bounded, like everything else.
+            if (paintFails.size() > 512) paintFails.clear();
+            Integer c = paintFails.get(k);
+            int n = c == null ? 1 : c + 1;
+            paintFails.put(k, n);
+            if (n < Resilience.paintFailQuarantineAfter()) return;
+            paintFails.remove(k);
+            if (quarantined.size() > 512) quarantined.clear();
+            quarantined.add(k);
+            ui.post(() -> guarded("quarantine swap", () -> {
+                RunHub.Row qr = rowByKey(k);
+                if (qr == null) return;
+                if (qr.kind == K_LIVE) return;   // legacy guard: live card lives in the footer now
+                synchronized (lock) {
+                    qr.kind = K_SYS;
+                    qr.text.setLength(0);
+                    qr.text.append(Resilience.quarantineLine());
+                    qr.input.setLength(0); qr.output.setLength(0);
+                    qr.open = false; qr.livePreview = false;
+                    qr.shown = qr.text.length();
+                }
+                touchView(qr);
+            }));
+        } catch (Throwable ignored) {}
+    }
+
+    private final Runnable tick = new Runnable() {
+        @Override public void run() {
+            // P23: the ticker paints every streaming delta on the main
+            // thread — a throw here used to kill the process mid-stream.
+            Throwable t = Resilience.guard(() -> {
+                boolean[] moreBox = {false};
+                boolean[] paintedBox = {false};   // P48: did this tick actually paint?
+                int[] tailLenBox = {0};           // P52: tail length → cadence
+                synchronized (lock) {
+                    for (int i = rows.size() - 1; i >= 0; i--) {
+                        RunHub.Row r = rows.get(i);
+                        int len = r.text.length();
+                        if (i == rows.size() - 1) tailLenBox[0] = len;
+                        if (r.shown > len) r.shown = len;
+                        if ((r.kind != K_ASSISTANT && r.kind != K_REASON)
+                                || r.shown >= len) continue;
+                        if (i != rows.size() - 1) {
+                            boolean wasBehind = r.shown < len;
+                            r.shown = len;      // a newer row appeared: snap
+                            if (wasBehind) requestPaint(r);
+                            if (r.key != null) pacerByKey.remove(r.key);
+                        } else {
+                            // P43: pace by ARRIVAL RATE, not by backlog.
+                            // The old step = 3 + (len-shown)/8 emptied each
+                            // multi-kB burst in ~0.5 s of rapid repaints and
+                            // then froze until the next burst — the field's
+                            // "it all flashes so fast … it thinks it's
+                            // realtime streaming but it's just a burst".
+                            // StreamPacer tracks how fast bytes arrive and
+                            // reveals just behind that, with a lag ceiling
+                            // so every burst still finishes within ~2 s.
+                            // P48: the profile follows the row — answers
+                            // glide capped at 900 c/s, THINKING rows crawl
+                            // at ≤170 c/s (the thought window is a window,
+                            // not a strobe; the answer's arrival snaps it).
+                            long now = android.os.SystemClock.elapsedRealtime();
+                            long was = r.shown;
+                            long ns = pacerFor(r).tick(now, len);
+                            // P48: the pacer's model can trail the view's
+                            // truth (a fresh pacer after a snap or resume
+                            // takes an opening bite) — the VIEW never goes
+                            // backwards. The clamp makes re-attachment
+                            // (resume, kind flip) regression-proof.
+                            r.shown = (int) Math.max(was, ns);
+                            paintedBox[0] = true;
+                        }
+                        // P24: a row that can't paint must not kill the
+                        // whole ticker — quarantine it like a flush failure.
+                        final RunHub.Row fr = r;
+                        Throwable pt = Resilience.guard(() -> paintStreaming(fr));
+                        if (pt != null) noteRowPaintFail(fr, pt);
+                        if (r.shown < len) moreBox[0] = true;
+                    }
+                }
+                // P48: scroll ONLY when this tick painted something, and
+                // POST it — after the layout pass, so the target height is
+                // the freshly grown one. The old inline scrollToEnd read a
+                // stale child height every 24 ms and the pin chased its own
+                // tail (the field's "it goes up and down").
+                if (paintedBox[0] && pinnedBottom) scroll.post(() -> scrollToEnd());
+                // P52: once an answer is long, halve the repaint cadence.
+                // The per-tick substring+setText is O(len); at 24 ms on a
+                // 24k+ answer the main thread was doing thousands of full
+                // copies and layout passes (the "it gets heavy on long
+                // answers" feel). The pacer still controls the reveal RATE
+                // from elapsedRealtime, `shown` stays monotonic, and the
+                // quiet finalize is untouched — only the frame cadence
+                // relaxes. Short answers keep the 24 ms glide.
+                if (moreBox[0]) smoother.postDelayed(this,
+                        tailLenBox[0] > STREAM_LONG_CHARS ? 48 : 24);
+                else smootherRunning = false;
+            });
+            if (t != null) {
+                smootherRunning = false;
+                contained("stream ticker", t);
+            }
+        }
+    };
+
+    /** In-place text paint while streaming (no view rebuilds). */
+    private void paintStreaming(RunHub.Row r) {
+        TextView body = bodyByKey.get(r.key);
+        View root = viewByKey.get(r.key);
+        if (body == null || root == null) { touchView(r); return; }
+        int len = r.text.length();
+        int upto = Math.min(r.shown, len);
+        if (r.kind == K_REASON && !r.open) {
+            // P20: collapsed thinking card → a live window of the FRESHEST
+            // thinking under the header (tail-anchored, token-by-token).
+            // P43: window widened 110 → 240 to match the 3-line build —
+            // a part of its actual thought, not one flashing line.
+            String win = Resilience.thinkWindow(r.text.toString(), upto, 240);
+            body.setText(win.length() == 0 ? "…" : win + "▍");
+        } else {
+            // P52: incremental append. The body holds `prefix + "▍"`; when
+            // only more of the SAME prefix has been revealed, replace the
+            // trailing caret with the delta and re-add it — O(delta), not
+            // a fresh O(len) substring + setText every tick. Any mismatch
+            // (first paint, rebuild, trim, kind flip) falls back to the
+            // full repaint, so `shown`/finalize semantics are unchanged.
+            boolean appended = false;
+            String key = r.key;
+            if (key != null) {
+                Integer prev = paintPrefix.get(key);
+                Editable ed = body.getEditableText();
+                if (prev != null && prev >= 0 && prev <= upto
+                        && ed != null && ed.length() == prev + 1) {
+                    ed.replace(prev, prev + 1, r.text.subSequence(prev, upto));
+                    ed.append("▍");
+                    paintPrefix.put(key, upto);
+                    appended = true;
+                }
+            }
+            if (!appended) {
+                String s = r.text.substring(0, upto);
+                body.setText(s.length() == 0 ? "…" : s + "▍",
+                        TextView.BufferType.EDITABLE);
+                if (key != null) {
+                    if (paintPrefix.size() > 256) paintPrefix.clear();
+                    paintPrefix.put(key, upto);
+                }
+            }
+        }
+        if (r.shown >= len) {
+            // P49: caught up → the markdown rebuild lands ONCE, after the
+            // row has been quiet for a beat — not at every burst boundary.
+            scheduleFinalize(r);
+        }
+    }
+
+    // ------------------------------------------------ P49: quiet finalize
+
+    /** P49: the catch-up → markdown rebuild used to run at EVERY burst
+     *  boundary: each catch-up re-rendered the whole part with Markdown
+     *  and rebuilt the view (removeViewAt+addView = full relayout of the
+     *  row). A long answer arrives as many bursts — dozens of full
+     *  main-thread re-renders, each a visible hitch: the stream glided
+     *  (P43/P48) but the screen still stuttered at every catch-up. Now
+     *  the plain-text painter keeps painting, and the ONE markdown
+     *  rebuild lands {@link #FINALIZE_QUIET_MS} after the row stops
+     *  growing — the answer settles, then the rich text fades in calm. */
+    static final long FINALIZE_QUIET_MS = 600;
+    private final java.util.HashMap<String, Runnable> finalizePending =
+            new java.util.HashMap<>();
+
+    /** P49: keys whose on-screen body is the CHEAP STREAMING view (the
+     *  caret painter). While a key is here, flush-driven repaints with
+     *  the row caught up route to the quiet finalize instead of
+     *  rebuilding — the boundary snapshots can no longer cost a full
+     *  markdown render per burst. Cleared wherever the view maps clear. */
+    private final java.util.HashSet<String> liveStreamViews =
+            new java.util.HashSet<>();
+
+    void scheduleFinalize(RunHub.Row r) {   // package-private: P49 test seam
+        if (r.key == null) { touchView(r); return; }   // unkeyed: old path
+        Runnable old = finalizePending.remove(r.key);
+        if (old != null) ui.removeCallbacks(old);
+        final String k = r.key;
+        Runnable fin = () -> {
+            finalizePending.remove(k);
+            if (isFinishing() || isDestroyed()) return;
+            List<RunHub.Row> rs = RunHub.rows();
+            Integer i = RunHub.idx().get(k);
+            if (i == null || i >= rs.size() || rs.get(i) != r) return;
+            if (r.shown < r.text.length()) return;   // growing again — the next catch-up re-arms
+            liveStreamViews.remove(k);   // THIS is the one rebuild
+            touchView(r);                             // the single markdown rebuild
+        };
+        finalizePending.put(k, fin);
+        ui.postDelayed(fin, FINALIZE_QUIET_MS);
+    }
+
+    /** Cancel every pending finalize — pause (nothing may fire into a
+     *  detached tree, the P48 lesson) and hubReset (the transcript is
+     *  being replaced). */
+    private void cancelFinalizes() {
+        for (Runnable f : finalizePending.values()) ui.removeCallbacks(f);
+        finalizePending.clear();
+    }
+
+    private boolean isStreamingTail(RunHub.Row r) {
+        if (!Theme.motionOn(this)) return false;
+        synchronized (lock) {
+            boolean last = !rows.isEmpty() && rows.get(rows.size() - 1) == r;
+            boolean streamable = r.kind == K_ASSISTANT || r.kind == K_REASON;
+            return last && streamable && r.shown < r.text.length()
+                    && r.text.length() <= 40000;
+        }
+    }
+
+    /** P48: reveal everything already received — settle every streaming
+     *  row to its full text in one pass (pacers dropped, rows repainted
+     *  through the coalesced flush). Used on RESUME: text that arrived
+     *  while the screen was away must not re-animate on return. Rows that
+     *  are STILL receiving deltas glide again from the fresh tail — the
+     *  next delta re-arms the ticker with a fresh pacer, and the tick's
+     *  no-regression clamp keeps the view monotonic. Package-private:
+     *  the P48 test seam. */
+    void snapArrived() {
+        synchronized (lock) {
+            for (int i = 0; i < rows.size(); i++) {
+                RunHub.Row r = rows.get(i);
+                if ((r.kind != K_ASSISTANT && r.kind != K_REASON)
+                        || r.shown >= r.text.length()) continue;
+                r.shown = r.text.length();
+                if (r.key != null) pacerByKey.remove(r.key);
+                requestPaint(r);
+            }
+        }
+    }
+
+    // --------------------------------------------------- P9 empty state
+
+    private void buildSuggestions() {
+        if (suggestBox == null) return;
+        String[][] ideas = {
+                {"Explain this codebase", "walk me through how this project is structured"},
+                {"Fix a bug", "find a bug in this project and fix it"},
+                {"Add a feature", "suggest and build one useful feature for this project"},
+                {"Write tests", "add tests for the most important code here"}};
+        for (String[] idea : ideas) {
+            TextView c = new TextView(this);
+            c.setText(idea[0]);
+            c.setTextSize(13);
+            c.setTypeface(Typeface.DEFAULT_BOLD);
+            c.setTextColor(Theme.cr(this, R.color.accent_light));
+            c.setBackground(Theme.suggestPill(this));
+            int p = dp(14);
+            c.setPadding(p, dp(11), p, dp(11));   // P25: taller touch target
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.topMargin = dp(8);
+            c.setLayoutParams(lp);
+            Theme.press(c);
+            c.setOnClickListener(v -> {
+                Theme.haptic(v);
+                input.setText(idea[1]);
+                input.setSelection(idea[1].length());
+                input.requestFocus();
+            });
+            suggestBox.addView(c);
+        }
+    }
+
+    private void syncEmpty() {
+        if (emptyHero == null) return;
+        boolean empty;
+        synchronized (lock) { empty = rows.isEmpty(); }
+        int vis = empty ? View.VISIBLE : View.GONE;
+        if (emptyHero.getVisibility() != vis) emptyHero.setVisibility(vis);
+        // P45: the greeting follows the clock, not the process — a chat
+        // opened at 23:58 that sits idle past midnight greets correctly
+        // on the next return to the empty state.
+        if (empty && heroTitle != null) {
+            try {
+                java.util.Calendar cal = java.util.Calendar.getInstance();
+                int h = cal.get(java.util.Calendar.HOUR_OF_DAY);
+                heroTitle.setText("Good " + (h < 5 ? "evening"
+                        : h < 12 ? "morning" : h < 18 ? "afternoon" : "evening"));
+            } catch (Exception ignored) {}
+        }
+    }
+
+    // -------------------------------------------------------- P8 ui extras
+
+    /** Full-screen "starting sandbox" veil — shown only while unhealthy. */
+    private void buildVeil() {
+        FrameLayout content = (FrameLayout) ((ViewGroup)
+                getWindow().getDecorView().findViewById(android.R.id.content));
+        FrameLayout fl = new FrameLayout(this);
+        fl.setBackgroundColor(Theme.surfaceScrim(0xE6));  // P32: palette-owned veil
+        fl.setClickable(true);
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
+        card.setBackground(Theme.panel(this));
+        int p = Theme.dp(this, 28);
+        card.setPadding(p, p, p, p);
+        FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER);
+
+        TextView dot = new TextView(this);
+        dot.setText("●");
+        dot.setTextSize(18);
+        dot.setTextColor(Theme.WARN);
+        dot.setGravity(Gravity.CENTER);
+        card.addView(dot);
+        veilDot = dot;
+        // P17: pulse moved to syncVeil — starts when the veil shows,
+        // cancels when it hides (the old unconditional start here pulsed
+        // an INVISIBLE view 24/7 — the idle-CPU bug the user felt as heat).
+
+        TextView t1 = new TextView(this);
+        t1.setText("starting sandbox");
+        t1.setTextSize(17);
+        t1.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        t1.setLetterSpacing(0.02f);
+        t1.setTextColor(Theme.TXT);
+        t1.setGravity(Gravity.CENTER);
+        t1.setPadding(0, Theme.dp(this, 12), 0, 0);
+        card.addView(t1);
+
+        TextView t2 = new TextView(this);
+        t2.setText(projectName == null ? "" : projectName);
+        t2.setTextSize(13);
+        t2.setTextColor(Theme.ACCENT_LT);
+        t2.setGravity(Gravity.CENTER);
+        t2.setPadding(0, Theme.dp(this, 5), 0, 0);
+        card.addView(t2);
+
+        TextView t3 = new TextView(this);
+        t3.setText("elapsed · 0 s");
+        t3.setTextSize(11);
+        t3.setTextColor(Theme.TXT_DIM);
+        t3.setGravity(Gravity.CENTER);
+        t3.setPadding(0, Theme.dp(this, 10), 0, 0);
+        card.addView(t3);
+        veilElapsed = t3;
+
+        TextView t4 = new TextView(this);
+        t4.setText("sessions and tools are rooted at\nyour project folder");
+        t4.setTextSize(10);
+        t4.setTextColor(Theme.TXT_FAINT);
+        t4.setGravity(Gravity.CENTER);
+        t4.setPadding(0, Theme.dp(this, 4), 0, 0);
+        card.addView(t4);
+
+        fl.addView(card, clp);
+        content.addView(fl, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        veil = fl;
+        veil.setVisibility(View.GONE);
+        // P17: the pulse now starts/stops WITH the veil (syncVeil) — the old
+        // code started an INFINITE animator here on a view that stays GONE
+        // while the server is healthy: invisible 60 fps work, forever.
+    }
+
+    private void syncVeil(int st) {
+        if (veil == null) return;
+        boolean show = st != ServerService.ST_HEALTHY;
+        boolean shown = veil.getVisibility() == View.VISIBLE;
+        if (show) {
+            // P42: a restart race flips STARTING→HEALTHY→STARTING — the
+            // old code re-ran the entry animation on every flap (strobe).
+            // Re-shows cancel any pending fade-out and reuse the veil.
+            // P42-check: heal a mid-fade flap — during the 150 ms fade
+            // the veil still reports VISIBLE, so the old !shown gate
+            // skipped the alpha reset and parked a translucent scrim
+            // (plus a frozen elapsed line) over the chat. Reset alpha
+            // and re-arm the ticker unconditionally.
+            veil.animate().cancel();
+            veil.setAlpha(1f);
+            if (!shown) {
+                veil.setVisibility(View.VISIBLE);
+                veilStartMs = System.currentTimeMillis();
+                if (Theme.motionOn(this)) {
+                    if (veilPulse != null) veilPulse.cancel();
+                    if (veilDot != null) veilPulse = Theme.pulse(veilDot);
+                }
+                Theme.appear(veil);
+            }
+            ui.removeCallbacks(veilTicker);
+            veilTicker.run();
+        } else if (shown) {
+            if (veilPulse != null) {
+                veilPulse.cancel();
+                veilPulse = null;   // P17: stop the burn
+            }
+            ui.removeCallbacks(veilTicker);
+            // P42: fade out instead of popping GONE — the transcript no
+            // longer flashes in at full brightness under a vanishing veil.
+            if (Theme.motionOn(this)) {
+                veil.animate().alpha(0f).setDuration(150)
+                        .withEndAction(() -> {
+                            if (veil != null) {
+                                veil.setVisibility(View.GONE);
+                                veil.setAlpha(1f);
+                            }
+                        }).start();
+            } else {
+                veil.setVisibility(View.GONE);
+            }
+        }
+    }
+
+    /** Three-dot typing indicator — P28: fills the DECLARED typingSlot
+     *  from the layout (directly above the composer). The old runtime
+     *  parenting (scroll.getParent() + indexOfChild(permSlot)) broke when
+     *  P27 wrapped the transcript in a FrameLayout: indexOfChild returned
+     *  -1, Math.max clamped it to 0, and the dots became an overlay inside
+     *  the transcript — the field's "thinking animation is in the middle".
+     *  A declared slot cannot drift; syncTyping only toggles visibility. */
+    private void buildTyping() {
+        typing = findViewById(R.id.typingSlot);
+        typing.setPadding(dp(18), dp(2), dp(16), dp(2));
+        for (int i = 0; i < 3; i++) {
+            TextView d = new TextView(this);
+            d.setText("●");
+            d.setTextSize(9);
+            d.setTextColor(Theme.ACCENT_LT);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.rightMargin = dp(4);
+            d.setLayoutParams(lp);
+            typing.addView(d);
+        }
+        TextView t = new TextView(this);
+        t.setText("thinking…");
+        t.setTextSize(12);
+        t.setTextColor(Theme.TXT_DIM);
+        typing.addView(t);
+    }
+
+    private void syncTyping() {
+        if (typing == null) return;
+        // P31: the dots answer the DISPLAYED chat's run — a script
+        // streaming in a background session must not look like this chat
+        // is thinking.
+        int vis = RunHub.busyFor(RunHub.displayedSession()) ? View.VISIBLE : View.GONE;
+        if (typing.getVisibility() != vis) {
+            typing.setVisibility(vis);
+            if (vis == View.VISIBLE) {
+                if (Theme.motionOn(this)) {
+                    typingAnims.clear();
+                    long d = 0;
+                    for (int i = 0; i < 3; i++) {
+                        View dot = typing.getChildAt(i);
+                        dot.setAlpha(1f);
+                        dot.setTranslationY(0f);
+                        // P12: wave — the dots bob in sequence instead of
+                        // blinking in place, reads as "breathing", not
+                        // "loading bar"
+                        ObjectAnimator bob = ObjectAnimator.ofFloat(dot,
+                                View.TRANSLATION_Y, 0f, -Theme.dp(this, 5), 0f);
+                        bob.setDuration(560);
+                        bob.setStartDelay(d);
+                        bob.setRepeatCount(ObjectAnimator.INFINITE);
+                        bob.setRepeatMode(ObjectAnimator.RESTART);
+                        bob.setInterpolator(Theme.DECEL);
+                        bob.start();
+                        typingAnims.add(bob);
+                        d += 150;
+                    }
+                }
+            } else {
+                for (ObjectAnimator a : typingAnims) a.cancel();
+                typingAnims.clear();
+                for (int i = 0; i < 3; i++) {
+                    typing.getChildAt(i).setAlpha(1f);
+                    typing.getChildAt(i).setTranslationY(0f);
+                }
+            }
+        }
+    }
+
+    /** "↓ latest" pill above the composer when scrolled up. P27: it lives
+     *  IN THE LAYOUT (inside the transcript's FrameLayout) — the old decor
+     *  anchor with a fixed 96dp margin floated over the composer text the
+     *  moment the input grew (field shot). Never overlaps anything now. */
+    private void buildPill() {
+        scrollPill = findViewById(R.id.scrollPill);
+        if (scrollPill == null) return;
+        scrollPill.setOnClickListener(v -> {
+            pinnedBottom = true;
+            // P48: the animated glide home fires scrollChanged every frame
+            // — bracket the whole flight or it unpins itself mid-air.
+            progScroll = true;
+            scroll.smoothScrollTo(0,
+                    Math.max(0, list.getHeight() - scroll.getHeight()));
+            scroll.postDelayed(pillProgReset, 450);
+            syncPill();
+        });
+    }
+
+    private void syncPill() {
+        if (scrollPill == null) return;
+        boolean want = !pinnedBottom;
+        if (want == pillShown) return;
+        pillShown = want;
+        if (Theme.motionOn(this)) {
+            scrollPill.animate().alpha(want ? 1f : 0f).setDuration(140)
+                    .setInterpolator(Theme.DECEL)
+                    .withStartAction(() -> { if (want) scrollPill.setVisibility(View.VISIBLE); })
+                    .withEndAction(() -> { if (!want) scrollPill.setVisibility(View.GONE); })
+                    .start();
+        } else {
+            scrollPill.setVisibility(want ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    // ----------------------------------------------------------- composer
+
+    private void toggleMode() {
+        RunHub.setAgent("build".equals(RunHub.agent()) ? "plan" : "build");
+        refreshChips();
+        Theme.pop(chipMode);
+        Toast.makeText(this, "agent: " + RunHub.agent(), Toast.LENGTH_SHORT).show();
+    }
+
+    private void refreshChips() {
+        boolean plan = "plan".equals(RunHub.agent());
+        chipMode.setText(plan ? "Plan" : "Build");
+        chipMode.setTextColor(Theme.cr(this, plan ? R.color.accent_light : R.color.ok));
+        String[] sel = Models.selected(this);
+        chipModel.setText(sel == null ? "model ▾" : sel[1]);
+    }
+
+    /** P25: the BUSY UI only — button, status line, typing dots. The busy
+     *  STATE lives in RunHub (it flips from SSE events, sends, settles —
+     *  with or without this screen). Delivered on main by hubBusy. */
+    private void applyBusyUi(boolean b) {
+        if (b) {
+            btnSend.setText("■");
+            btnSend.setContentDescription("Stop");
+            btnSend.setTextSize(16);
+            btnSend.setBackgroundResource(R.drawable.bg_stop);
+            btnSend.setTextColor(Theme.cr(this, R.color.err));
+            tvStatus.setVisibility(View.VISIBLE);
+            tvStatus.setText("working — tap ■ to stop");
+        } else {
+            btnSend.setText("↑");
+            btnSend.setContentDescription("Send");
+            btnSend.setTextSize(22);
+            btnSend.setBackgroundResource(R.drawable.bg_send);
+            btnSend.setTextColor(Theme.cr(this, R.color.on_accent));
+            tvStatus.setVisibility(View.GONE);
+        }
+        syncTyping();
+        syncLiveFooter();                   // P26: footer appears/disappears with the run
+    }
+
+    // ------------------------------------------- P26: the live-tree footer
+    // P27 — REBUILT AS A PERSISTENT, IN-PLACE CARD. The P26 version called
+    // removeAllViews() + a full rebuild on EVERY hubLive (each debounced
+    // DirWatcher batch, each peek reload) — the field card was unusable
+    // mid-run: taps landed on views destroyed between touch-down and
+    // touch-up ("does nothing"), or on a DIFFERENT row that had replaced
+    // the one under the finger ("navigates into something unexpected"),
+    // and the idle auto-collapse could restructure the card mid-gesture.
+    //
+    // The contract now:
+    //   • the card skeleton is built ONCE per run (busy start); every
+    //     update after that is IN PLACE — header texts setText, tree rows
+    //     diffed by stable key and mutated, never torn down wholesale;
+    //   • a row's identity never changes under an existing view (key
+    //     mismatch → that view is replaced, matching views are only
+    //     re-bound), so a listener can never fall through to a row that
+    //     was not the one the user aimed at;
+    //   • the idle auto-collapse is applied structurally ONLY when no
+    //     touch is in progress on the card (else it retries in 150 ms —
+    //     the timer can never cancel a tap);
+    //   • head tap = PIN (RunHub.toggleLivePin): pinned cards never
+    //     auto-collapse; unpin returns to auto; selection pins too;
+    //   • liveOpen + selected file live in RunHub, so they survive every
+    //     repaint AND every re-bind (re-entering mid-run restores card,
+    //     tree, selection and peek exactly).
+
+    /** Max height of the tree box — beyond this it scrolls in place. */
+    private static final int TREE_MAX_DP = 200;
+    /** Estimated per-row height used to pre-size the scroll cap. */
+    private static final int TREE_ROW_DP = 27;
+
+    private LinearLayout liveCard;      // the card (built once per run)
+    private TextView liveDot, liveSummary, liveChev;
+    private ScrollView liveScroll;      // hosts the tree, height-capped
+    private LinearLayout liveBox;       // tree rows (diffed in place)
+    private LinearLayout livePeekSlot;  // the peek (rebuilt only on selection change)
+
+    /** The in-progress-tap guard: true while any descendant of the card is
+     *  pressed. Auto-collapse DEFERS while this is true — a scheduled
+     *  structural change must never eat a gesture. */
+    private boolean gestureInProgress() {
+        if (liveCard == null) return false;
+        if (liveCard.isPressed()) return true;
+        for (int i = 0; i < liveBox.getChildCount(); i++) {
+            if (liveBox.getChildAt(i).isPressed()) return true;
+        }
+        return liveScroll.isPressed() || (livePeekSlot != null && livePeekSlot.isPressed());
+    }
+
+    private void syncLiveFooter() {
+        if (liveSlot == null) return;
+        if (!RunHub.busyFor(RunHub.displayedSession())) {
+            // run over (settleBusyUi also cleared liveOpen/liveSel) — the
+            // whole card disappears, exactly as the field asked.
+            if (liveSlot.getVisibility() != View.GONE
+                    || liveSlot.getChildCount() != 0) {
+                liveSlot.removeAllViews();
+                liveSlot.setVisibility(View.GONE);
+            }
+            liveCard = null; liveBox = null; liveScroll = null;
+            liveDot = null; liveSummary = null; liveChev = null;
+            livePeekSlot = null;
+            return;
+        }
+        liveSlot.setVisibility(View.VISIBLE);
+        if (liveCard == null || liveCard.getParent() == null) buildLiveSkeleton();
+        Throwable t = Resilience.guard(this::updateLiveCard);
+        if (t != null) Trail.record(this, "live footer", t);
+    }
+
+    /** Build the once-per-run skeleton. Every listener attached here lives
+     *  for the whole run — nothing below is rebuilt by streaming. */
+    private void buildLiveSkeleton() {
+        liveSlot.removeAllViews();
+        liveCard = new LinearLayout(this);
+        liveCard.setOrientation(LinearLayout.VERTICAL);
+        liveCard.setBackground(Theme.thoughtCard(this));
+        int cp = dp(11);
+        liveCard.setPadding(cp, dp(8), cp, dp(9));
+
+        // ---- header: ● PINNED/LIVE · summary ……………………………………… ▸
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setPadding(0, dp(4), 0, dp(4));   // taller tap target
+
+        liveDot = text(9, R.color.text_primary, false);
+        liveDot.setText("●");
+        head.addView(liveDot);
+
+        TextView tag = text(10, R.color.text_secondary, true);
+        tag.setText("  LIVE");
+        tag.setLetterSpacing(0.14f);
+        // clipping audit: letterspaced caps carry trailing advance — match
+        // it with end padding so the following text keeps a real gap.
+        tag.setPadding(0, 0, dp(4), 0);
+        head.addView(tag);
+
+        liveSummary = text(11, R.color.text_secondary, false);
+        liveSummary.setPadding(dp(8), 0, 0, 0);
+        liveSummary.setSingleLine(true);
+        liveSummary.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        head.addView(liveSummary, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+        liveChev = text(11, R.color.text_secondary, false);
+        liveChev.setText("▾");
+        liveChev.setPadding(dp(6), 0, dp(2), 0);
+        head.addView(liveChev);
+        liveCard.addView(head);
+
+        Theme.press(head);
+        head.setOnClickListener(v -> {
+            v.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY);
+            RunHub.toggleLivePin();   // pin ↔ unpin; notifyLive repaints in place
+        });
+
+        liveScroll = new ScrollView(this);
+        liveScroll.setVerticalScrollBarEnabled(false);
+        liveBox = new LinearLayout(this);
+        liveBox.setOrientation(LinearLayout.VERTICAL);
+        liveBox.setPadding(dp(2), dp(4), 0, 0);
+        liveScroll.addView(liveBox);
+        liveScroll.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        liveCard.addView(liveScroll);
+
+        livePeekSlot = new LinearLayout(this);
+        livePeekSlot.setOrientation(LinearLayout.VERTICAL);
+        liveCard.addView(livePeekSlot);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(8);
+        liveCard.setLayoutParams(lp);
+        liveSlot.addView(liveCard);
+    }
+
+    /** One in-place refresh: header texts, then the tree/peek reconcile. */
+    private void updateLiveCard() {
+        if (liveCard == null) return;
+        boolean empty = RunHub.liveCount() == 0;
+        boolean expanded = RunHub.liveExpanded();
+        if (liveDot != null) {
+            // STATIC dot — no pulse (field request, kept). Brightness says
+            // the state: accent = pinned, dim accent = auto/live, gray =
+            // watching with no edits yet.
+            liveDot.setTextColor(empty ? Theme.TXT_DIM
+                    : RunHub.livePinned() ? Theme.ACCENT_LT : Theme.ACCENT);
+            liveDot.setAlpha(empty ? 0.55f : 1f);
+        }
+        if (liveSummary != null) {
+            liveSummary.setText(empty ? "watching project files…"
+                    : RunHub.liveSummaryLine(false)
+                      + (RunHub.livePinned() ? "  ·  pinned" : ""));
+        }
+        if (liveChev != null) liveChev.setText(expanded ? "▾" : "▸");
+
+        if (expanded && !empty) {
+            reconcileTree();
+            reconcilePeek();
+        } else {
+            // structural collapse — DEFERRED while a gesture is on the card
+            if ((liveBox != null && liveBox.getChildCount() > 0)
+                    || (liveScroll != null && liveScroll.getVisibility() != View.GONE)
+                    || (livePeekSlot != null && livePeekSlot.getChildCount() > 0)) {
+                if (gestureInProgress()) {          // never cancel a tap mid-air
+                    ui.removeCallbacks(deferredLiveUpdate);
+                    ui.postDelayed(deferredLiveUpdate, 150);
+                    return;
+                }
+                if (liveBox != null) liveBox.removeAllViews();
+                if (liveScroll != null) liveScroll.setVisibility(View.GONE);
+                if (livePeekSlot != null) livePeekSlot.removeAllViews();
+            }
+        }
+    }
+
+    private final Runnable deferredLiveUpdate = this::updateLiveCard;
+
+    // ---- in-place tree reconcile ------------------------------------------
+
+    /** One desired tree row: {kind, key, payload, depth}. kind "f" = file
+     *  (payload EditPulse.Ev), "d" = dir (payload EditPulse.TNode). */
+    private void flattenTree(List<EditPulse.TNode> nodes, int depth,
+                             java.util.Set<String> autoOpen, List<Object[]> out) {
+        for (EditPulse.TNode n : nodes) {
+            if (n.ev != null) {
+                out.add(new Object[]{"f", n.ev.abs, n.ev, depth});
+            } else {
+                out.add(new Object[]{"d", n.dir, n, depth});
+                if (dirOpen(n, autoOpen)) {
+                    flattenTree(n.kids, depth + 1, autoOpen, out);
+                }
+            }
+        }
+    }
+
+    /** Diff the desired rows into liveBox: matching keys are re-bound IN
+     *  PLACE (same view, same listener), key mismatches replace exactly
+     *  that index, additions append — a row under the finger is never
+     *  destroyed by streaming (and never swapped for another identity). */
+    private void reconcileTree() {
+        List<EditPulse.TNode> tree = RunHub.liveTree();
+        String newest = RunHub.liveNewest();
+        java.util.Set<String> autoOpen = autoOpenDirs(tree, newest);
+        List<Object[]> want = new ArrayList<>();
+        flattenTree(tree, 0, autoOpen, want);
+
+        boolean motion = Theme.motionOn(this);
+        int[] stagger = {0};
+        for (int i = 0; i < want.size(); i++) {
+            Object[] w = want.get(i);
+            String key = (String) w[1];
+            View cur = i < liveBox.getChildCount() ? liveBox.getChildAt(i) : null;
+            String curKey = cur != null && cur.getTag() instanceof String
+                    ? (String) cur.getTag() : null;
+            if (!key.equals(curKey)) {
+                View nv = "f".equals(w[0])
+                        ? makeFileRow((EditPulse.Ev) w[2], (Integer) w[3])
+                        : makeDirRow((EditPulse.TNode) w[2], (Integer) w[3], autoOpen);
+                nv.setTag(key);
+                if (i < liveBox.getChildCount()
+                        && !(cur != null && cur.isPressed())) {
+                    liveBox.removeViewAt(i);
+                    liveBox.addView(nv, i);
+                } else if (i >= liveBox.getChildCount()) {
+                    liveBox.addView(nv);
+                } else {
+                    liveBox.addView(nv, i);   // keep the pressed row one cycle
+                }
+                cur = nv;
+            }
+            // in-place rebind (text/counters/selection/highlight)
+            EditPulse.Ev ev = "f".equals(w[0]) ? (EditPulse.Ev) w[2] : null;
+            if (ev != null) bindFileRow(cur, ev, (Integer) w[3], newest, motion, stagger);
+            else bindDirRow(cur, (EditPulse.TNode) w[2], autoOpen);
+        }
+        // surplus rows fall off the tail (never the pressed one mid-gesture)
+        while (liveBox.getChildCount() > want.size()) {
+            int last = liveBox.getChildCount() - 1;
+            if (liveBox.getChildAt(last).isPressed()) break;
+            liveBox.removeViewAt(last);
+        }
+
+        // height cap — update the existing ScrollView's params IN PLACE
+        int capRows = Math.max(3, TREE_MAX_DP / TREE_ROW_DP);
+        boolean capped = want.size() > capRows;
+        ViewGroup.LayoutParams lp = liveScroll.getLayoutParams();
+        int wantH = capped ? dp(TREE_MAX_DP) : ViewGroup.LayoutParams.WRAP_CONTENT;
+        if (lp.height != wantH) {
+            lp.height = wantH;
+            liveScroll.setLayoutParams(lp);
+        }
+        if (liveScroll.getVisibility() != View.VISIBLE) liveScroll.setVisibility(View.VISIBLE);
+    }
+
+    /** The peek slot: rebuilt ONLY when the selection changes (user tap —
+     *  no streaming race), text updated in place on every fs event. */
+    private void reconcilePeek() {
+        String sel = RunHub.liveSel();
+        if (sel == null) {
+            if (livePeekSlot.getChildCount() > 0 && !livePeekSlot.isPressed()) {
+                livePeekSlot.removeAllViews();
+            }
+            return;
+        }
+        TextView pv;
+        if (livePeekSlot.getChildCount() > 0
+                && sel.equals(livePeekSlot.getTag())) {
+            pv = (TextView) livePeekSlot.getChildAt(0);
+        } else {
+            livePeekSlot.removeAllViews();
+            pv = mono(text(10, R.color.text_primary, false), 10);
+            pv.setBackground(Theme.codeWell(this));
+            int pp = dp(9);
+            pv.setPadding(pp, pp, pp, pp);
+            pv.setSingleLine(false);
+            LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            plp.topMargin = dp(8);
+            livePeekSlot.addView(pv, plp);
+            livePeekSlot.setTag(sel);
+        }
+        String cached = RunHub.peekFor(sel);
+        if (cached != null) {
+            // P28: the "▸ " focus line gets the accent highlight — at a
+            // glance the peek shows WHICH line the agent is editing right
+            // now. The change guard compares CONTENT (String.contentEquals):
+            // SpannableString.equals is identity-based, so a naive equals()
+            // would re-setText (and re-layout) on every hot-feed poll for
+            // identical text — exactly the churn this guard exists to stop.
+            CharSequence cur = pv.getText();
+            if (!cached.contentEquals(cur)) pv.setText(stylePeek(cached));
+        } else {
+            pv.setText("…");
+            RunHub.ensurePeek(sel);
+        }
+    }
+
+    /** P28: paint the peek's focus line — accent-subtle background wash +
+     *  accent-light text over the "▸ " range (EditPulse.focusRange, pure).
+     *  Never throws: a broken window renders plain. Package-visible: the
+     *  P28UiTest pins the span shape (the paintRowOnce seam pattern). */
+    CharSequence stylePeek(String peek) {
+        try {
+            int[] fr = EditPulse.focusRange(peek);
+            if (fr == null) return peek;
+            android.text.SpannableString sp = new android.text.SpannableString(peek);
+            sp.setSpan(new android.text.style.BackgroundColorSpan(
+                    Theme.ACCENT_BG), fr[0], fr[1],
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sp.setSpan(new android.text.style.ForegroundColorSpan(
+                    Theme.ACCENT_LT), fr[0], fr[1],
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sp.setSpan(new android.text.style.StyleSpan(
+                    android.graphics.Typeface.BOLD), fr[0], fr[1],
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            return sp;
+        } catch (Exception e) {
+            return peek;
+        }
+    }
+
+    // ---- P23: blast-radius zero ----------------------------------------
+    // The field device died on send with an unhandled Java exception while
+    // every audited stage had catch(Exception): the hole was Errors (OOM,
+    // linkage) + the thread boundaries between them. Contract from P23 on:
+    // NOTHING on the send/chat/feed paths kills the process — a Throwable
+    // is contained, recorded to the guard trail, and shown as one line.
+    private final java.util.Map<String, Long> containedAt = new HashMap<>();
+    private final java.util.Map<String, Integer> containedCount = new HashMap<>();
+    // P24: per-row paint fault bookkeeping. paintFails counts attempts per
+    // row key; quarantined keys are skipped by every flush forever (their
+    // content was swapped for a can't-fail fallback line).
+    private final java.util.Map<String, Integer> paintFails = new HashMap<>();
+    private final java.util.Set<String> quarantined = new java.util.HashSet<>();
+
+    /** Run {@code r} at Throwable breadth; contain + report on failure. */
+    private void guarded(String what, Runnable r) {
+        Throwable t = Resilience.guard(r);
+        if (t != null) contained(what, t);
+    }
+
+    /** Record + surface a contained failure (throttled per what). P24:
+     *  a REPEATED failure carries its one-line identity (class: message
+     *  · top app frame) inside the note — a single screenshot from the
+     *  field is now a diagnosis, no Diagnostics trip needed. */
+    private void contained(String what, Throwable t) {
+        Trail.record(this, what, t);
+        long now = System.currentTimeMillis();
+        Long last = containedAt.get(what);
+        Integer prev = containedCount.get(what);
+        int n = (prev == null || last == null || now - last > 60_000) ? 1 : prev + 1;
+        containedCount.put(what, n);
+        if (last != null && now - last < 2500) return;   // no note spam
+        containedAt.put(what, now);
+        StringBuilder b = new StringBuilder();
+        b.append("\u26a0 contained an internal error in ").append(what)
+         .append(" — the chat survived; \u2318 \u2192 Logs & shell has the trace");
+        if (n >= 2) b.append('\n').append(Resilience.traceLine(t));
+        RunHub.sys(b.toString());    // P25: a model row — survives screen changes
+    }
+
+    // ------------------------------------------------- service event feed
+
+    /** ServerService state changes → header subtitle. */
+    @Override
+    public void on(int newState, String detail) {
+        ui.post(() -> guarded("server ui", this::refreshServerUi));
+        if (newState == ServerService.ST_HEALTHY) {
+            ui.post(() -> guarded("permissions", this::checkPermissionQueue));
+            ui.post(() -> guarded("env welcome", this::showEnvWelcome));          // P15: one-shot env report
+            // P18: an AUTO-recovery happened while this chat was open —
+            // say so, and make clear the chat survived (sessions are on
+            // disk). This replaces the old cold-boot ritual entirely.
+            final String note = ServerService.consumeRecoveryNote();
+            if (note != null) ui.post(() -> sys("♻ " + note));
+            // P26: the boot-race self-heal — a resume that fired before the
+            // sandbox answered planted replayNeeded; the server now speaks,
+            // so pull the transcript NOW instead of waiting for the user to
+            // bounce the screen (the "comeback shows a stale/loading chat"
+            // bug, fixed at the root).
+            RunHub.reconcileOnBind();
+        }
+    }
+
+    /** P15 — the agent's own suggestion: "Show environment info when agent
+     *  starts, so it knows what it's working with." One welcome row per
+     *  chat lifetime (⌘ → Sandbox environment re-runs it on demand). */
+    private boolean envShown;
+
+    private void showEnvWelcome() {
+        if (envShown || isFinishing() || isDestroyed()) return;
+        envShown = true;
+        ex.execute(() -> {
+            Throwable t = Resilience.guard(() -> {
+                final String rep = Debian.envReport(this);
+                ui.post(() -> sys(rep));
+            });
+            if (t != null) Trail.record(this, "env report", t);
+        });
+    }
+
+    private void refreshServerUi() {
+        int st = ServerService.getState();
+        String s;
+        switch (st) {
+            case ServerService.ST_HEALTHY: s = "sandbox ready"; break;
+            case ServerService.ST_STARTING: s = "starting sandbox…"; break;
+            case ServerService.ST_EXITED: s = "server exited — ⌘ → Restart server"; break;
+            case ServerService.ST_STOPPED: s = "server stopped — ⌘ → Restart server"; break;
+            default: s = "server idle";
+        }
+        if (projectName != null && !projectName.isEmpty()) s = projectName + " · " + s;
+        // P14: the pill lives in its own header slot so nothing is cut off.
+        // P25: the Σ pill now reads as CONTEXT DEPTH — current context vs
+        // the model's window ("48k / 200k · 24%") — computed from the last
+        // turn's token count; the session $ cost stays exactly as verified.
+        String spend = RunHub.ctxPillLine();
+        if (tvSpend != null) {
+            if (spend.isEmpty()) {
+                tvSpend.setVisibility(View.GONE);
+            } else {
+                tvSpend.setVisibility(View.VISIBLE);
+                tvSpend.setText("Σ " + spend);
+            }
+        }
+        if (!AuthStore.hasAnyKey(this) && st == ServerService.ST_HEALTHY) {
+            s += " · no API key yet — ⌘ → API keys";
+        }
+        String runsNote = backgroundRunsNote();
+        if (!runsNote.isEmpty()) s += runsNote;
+        String capNote = creditCapNote();
+        if (!capNote.isEmpty()) s += capNote;
+        tvSub.setText(s);
+        syncVeil(st);
+    }
+
+    /** P31: "a script is running in another chat" — honest subtitle note
+     *  whenever parallel runs exist beyond the displayed one. Empty when
+     *  none. */
+    private String backgroundRunsNote() {
+        String sid = RunHub.displayedSession();
+        if (!RunHub.othersRunning(sid)) return "";
+        return " · ▶ running in another chat (Sessions)";
+    }
+
+    /** P31: the credit limit rides the subtitle when it matters — a
+     *  WARN-colored nudge at ≥80%, the hard stop line at 100%. Empty
+     *  when no cap is set or spending is well under it. */
+    private String creditCapNote() {
+        double cap = RunHub.spendCap();
+        if (cap <= 0) return "";
+        double spent = RunHub.spendTotal();
+        int v = CreditLimit.verdict(spent, cap);
+        if (v == CreditLimit.OK) return "";
+        return v == CreditLimit.BLOCK
+                ? " · ⛔ credit limit reached — Settings → Safety"
+                : " · ⚠ " + CreditLimit.stateLine(spent, cap);
+    }
+
+    /** Subtitle only repaints on hub events — parallel run starts/stops
+     *  fire hubBusy, so this is the repaint hook (called from hubBusy). */
+    private void syncBackgroundRunsNote() {
+        ui.post(this::refreshServerUi);
+    }
+
+    // ================================================= P25: live edit tree
+    // The view half of the edit shower (P27: persistent card + in-place
+    // row reconcile — see the contract block above syncLiveFooter). STATE
+    // (feed, selection, peek cache, watcher, pin) lives in RunHub; rows
+    // below are built once per appearance and re-bound by key.
+
+    /** Dirs the user has NOT explicitly toggled follow the freshest
+     *  activity: the newest event's ancestor chain is expanded, sibling
+     *  dirs stay collapsed ("directories collapsed, only touched paths
+     *  expanded"). Pure given the tree. */
+    private java.util.Set<String> autoOpenDirs(List<EditPulse.TNode> tree, String newest) {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        if (newest == null) return out;
+        collectAutoOpen(tree, newest, out);
+        return out;
+    }
+
+    private void collectAutoOpen(List<EditPulse.TNode> nodes, String newest,
+                                 java.util.Set<String> out) {
+        for (EditPulse.TNode n : nodes) {
+            if (n.ev != null && newest.equals(n.ev.abs)) {
+                out.addAll(EditPulse.ancestors(n.ev.rel));
+            } else if (n.ev == null && !n.kids.isEmpty()) {
+                collectAutoOpen(n.kids, newest, out);
+            }
+        }
+    }
+
+    /** A dir is open when the user toggled it, else auto (newest branch). */
+    private boolean dirOpen(EditPulse.TNode d, java.util.Set<String> autoOpen) {
+        Boolean st = dirState.get(d.dir);
+        return st != null ? st : autoOpen.contains(d.dir);
+    }
+
+    // ---- P27 row views: built ONCE per appearance, re-bound by key ----
+    // Each row carries its views as tags; bind* only setText/setBackground
+    // (plus the one-shot entrance animation for brand-new events). Tap
+    // listeners capture NOTHING that streams — they re-read the hub state
+    // at click time, so a row can never act on stale data.
+
+    /** One directory row — tap toggles expand/collapse (user interaction:
+     *  also pins the card open, a collapse under an open finger reads as
+     *  the app fighting the user). */
+    private View makeDirRow(final EditPulse.TNode d, int depth,
+                            final java.util.Set<String> autoOpen) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView chev = text(10, R.color.text_secondary, false);
+        chev.setPadding(0, 0, dp(5), 0);
+        row.addView(chev);
+
+        TextView name = mono(text(11, R.color.text_secondary, false), 11);
+        name.setSingleLine(true);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        row.addView(name, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+        TextView n = text(10, R.color.text_secondary, false);
+        n.setPadding(dp(6), 0, 0, 0);
+        row.addView(n);
+
+        Theme.press(row);
+        row.setOnClickListener(v -> {
+            dirState.put(d.dir, !dirOpen(d, autoOpen));
+            capDirState();
+            if (RunHub.liveOpen == null) RunHub.toggleLivePin();  // stay open
+            updateLiveCard();
+        });
+        bindDirRow(row, d, autoOpen);
+        return row;
+    }
+
+    /** In-place rebind of a dir row (chevron, name, hit counter). */
+    private void bindDirRow(View rowV, EditPulse.TNode d,
+                            java.util.Set<String> autoOpen) {
+        LinearLayout row = (LinearLayout) rowV;
+        TextView chev = (TextView) row.getChildAt(0);
+        TextView name = (TextView) row.getChildAt(1);
+        TextView n = (TextView) row.getChildAt(2);
+        chev.setText(dirOpen(d, autoOpen) ? "▾" : "▸");
+        String seg = d.dir;
+        int sl = seg.lastIndexOf('/');
+        if (sl >= 0) seg = seg.substring(sl + 1);
+        name.setText(seg + "/");
+        n.setText("· " + d.hits + (d.hits == 1 ? " edit" : " edits"));
+    }
+
+    /** dirState is view-local preference memory — bounded like everything. */
+    private void capDirState() {
+        while (dirState.size() > 64) {
+            String first = dirState.keySet().iterator().next();
+            dirState.remove(first);
+        }
+    }
+
+    /** One file row inside the tree — tap to peek around the edit.
+     *  The NEWEST event's row carries the accent dot; depth indents. */
+    private View makeFileRow(final EditPulse.Ev e, int depth) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView g = text(11, R.color.text_secondary, false);
+        LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        glp.rightMargin = dp(7);
+        g.setLayoutParams(glp);
+        row.addView(g);
+
+        TextView p = mono(text(11, R.color.text_primary, false), 11);
+        p.setSingleLine(true);
+        p.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        row.addView(p, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+        TextView age = text(10, R.color.text_secondary, false);
+        age.setPadding(dp(6), 0, 0, 0);
+        row.addView(age);
+
+        TextView fresh = text(9, R.color.accent_light, true);
+        fresh.setPadding(dp(5), 0, dp(2), 0);
+        fresh.setText("●");
+        fresh.setVisibility(View.GONE);
+        row.addView(fresh);
+
+        Theme.press(row);
+        row.setOnClickListener(v -> {
+            String next = (RunHub.liveSel() != null && RunHub.liveSel().equals(e.abs))
+                    ? null : e.abs;
+            RunHub.setLiveSel(next);   // pins open + loads the peek
+        });
+        return row;
+    }
+
+    /** In-place rebind of a file row (glyph, path, age, newest dot,
+     *  selection highlight, entrance animation for events not yet seen). */
+    private void bindFileRow(View rowV, EditPulse.Ev e, int depth, String newest,
+                             boolean motion, int[] stagger) {
+        LinearLayout row = (LinearLayout) rowV;
+        int rp = dp(6 + depth * 12);
+        row.setPadding(rp, dp(3), rp, dp(3));
+        boolean sel = e.abs != null && e.abs.equals(RunHub.liveSel());
+        boolean isNewest = e.abs != null && e.abs.equals(newest);
+        if (sel) row.setBackground(Theme.codeWell(this));
+        else row.setBackground(null);
+
+        TextView g = (TextView) row.getChildAt(0);
+        g.setText(EditPulse.glyph(e.action));
+        g.setTextColor(Theme.cr(this, "del".equals(e.action)
+                ? R.color.err : R.color.text_secondary));
+
+        TextView p = (TextView) row.getChildAt(1);
+        p.setText(e.rel + (e.hits > 1 ? "  ×" + e.hits : ""));
+
+        TextView age = (TextView) row.getChildAt(2);
+        // P42: e.ts is epoch-ms; the old call passed an AGE in seconds into
+        // a helper that read it as epoch-seconds → every row painted
+        // "20090 d ago". ago() takes epoch-ms directly.
+        age.setText(Resilience.ago(e.ts, System.currentTimeMillis()));
+
+        TextView fresh = (TextView) row.getChildAt(3);
+        fresh.setVisibility(isNewest ? View.VISIBLE : View.GONE);
+
+        if (!e.seen && motion) {          // only NEW events animate —
+            row.setAlpha(0f);             // repaints never replay it
+            row.setTranslationY(dp(8));
+            row.animate().alpha(1f).translationY(0f)
+                    .setStartDelay(stagger[0]).setDuration(170)
+                    .setInterpolator(Theme.DECEL).start();
+            stagger[0] = Math.min(stagger[0] + 45, 270);
+        }
+        e.seen = true;
+    }
+
+    // ================================================= P17: vision / images
+    // P29 REWORK — the messenger flow the field asked for: select ONE OR
+    // MANY photos, they land as thumbs ABOVE the composer with an ✕ each,
+    // and the send button ships them all in ONE message with the typed
+    // text. The old per-image confirm sheet is gone — the composer text
+    // IS the caption, like every other chat app.
+
+    private void pickImage() {
+        try {
+            Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("image/*");
+            i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);   // the whole point
+            startActivityForResult(
+                    Intent.createChooser(i, "Attach images"), REQ_IMAGE);
+        } catch (Exception e) {
+            Toast.makeText(this, "no image picker available", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /**
+     * P29 tray intake: every picked Uri downscales off-thread, decodes its
+     * REAL post-downscale dims (the cost estimate uses actual pixels, not
+     * a guess), then joins the tray. Failures degrade to one sys line per
+     * bad image — the rest of the batch still lands.
+     */
+    private void addAttachFromUri(final Uri uri) {
+        ex.execute(() -> {
+            try {
+                final File jpg = Vision.downscale(this, uri);
+                BitmapFactory.Options o = new BitmapFactory.Options();
+                o.inJustDecodeBounds = true;
+                BitmapFactory.decodeFile(jpg.getAbsolutePath(), o);
+                final int w = Math.max(1, o.outWidth), h = Math.max(1, o.outHeight);
+                ui.post(() -> addAttach(new PendingImg(jpg, w, h)));
+            } catch (Exception e) {
+                ui.post(() -> sys("could not read that image: " + e.getMessage()));
+            }
+        });
+    }
+
+    /** Add to the tray (main thread). Cap enforced; duplicates skipped. */
+    private void addAttach(PendingImg p) {
+        if (isFinishing() || isDestroyed()) return;
+        if (pendingAttach.size() >= CostMath.MAX_ATTACHMENTS) {
+            Toast.makeText(this, "max " + CostMath.MAX_ATTACHMENTS
+                    + " images per message", Toast.LENGTH_SHORT).show();
+            p.file.delete();
+            return;
+        }
+        for (PendingImg q : pendingAttach) {
+            if (q.file.equals(p.file)) return;      // picker double-delivery
+        }
+        pendingAttach.add(p);
+        Theme.pop(attachSlot != null ? attachSlot : btnVision);
+        renderAttachTray();
+        syncCostHint();
+    }
+
+    /** Rebuild the tray (small N, user-action frequency — rebuild is fine;
+     *  nothing here ever runs during streaming). ✕ removes with a haptic. */
+    private void renderAttachTray() {
+        if (attachSlot == null || attachScroll == null) return;
+        attachSlot.removeAllViews();
+        for (int i = 0; i < pendingAttach.size(); i++) {
+            final PendingImg p = pendingAttach.get(i);
+            FrameLayout chip = new FrameLayout(this);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    dp(64), dp(64));
+            lp.rightMargin = dp(8);
+            chip.setLayoutParams(lp);
+
+            ImageView iv = new ImageView(this);
+            Bitmap bm = attachThumbs.get(p.file.getAbsolutePath());
+            if (bm == null) {
+                bm = Vision.decodeBounded(p.file.getAbsolutePath(), 128);
+                if (bm != null) attachThumbs.put(p.file.getAbsolutePath(), bm);
+            }
+            if (bm != null) iv.setImageBitmap(bm);
+            else iv.setImageResource(android.R.drawable.ic_menu_report_image);
+            iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            iv.setBackground(Theme.codeWell(this));
+            chip.addView(iv, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT));
+
+            // the ✕ badge — the field's exact ask ("appear above chat with
+            // a cross sign so i can remove them")
+            TextView x = new TextView(this);
+            x.setText("✕");
+            x.setContentDescription("Remove attachment");
+            x.setTextSize(11);
+            x.setTextColor(Theme.cr(this, R.color.text_primary));
+            x.setGravity(Gravity.CENTER);
+            x.setBackgroundResource(R.drawable.bg_chip);
+            // P42-check: 28dp — 20dp was a thumbnail-size touch target
+            // for the only remove control on the tray.
+            FrameLayout.LayoutParams xlp = new FrameLayout.LayoutParams(
+                    dp(28), dp(28), Gravity.TOP | Gravity.END);
+            xlp.rightMargin = dp(-9);
+            xlp.topMargin = dp(-9);
+            x.setLayoutParams(xlp);
+            x.setOnClickListener(v -> {
+                Theme.haptic(v);
+                pendingAttach.remove(p);
+                attachThumbs.remove(p.file.getAbsolutePath());
+                p.file.delete();
+                renderAttachTray();
+                syncCostHint();
+            });
+            chip.addView(x);
+            attachSlot.addView(chip);
+        }
+        attachScroll.setVisibility(pendingAttach.isEmpty()
+                ? View.GONE : View.VISIBLE);
+    }
+
+    /** Empty the tray. deleteFiles=false when the hub is about to read
+     *  them (send path); true when discarding picks. */
+    private void clearAttach(boolean deleteFiles) {
+        if (deleteFiles) for (PendingImg p : pendingAttach) p.file.delete();
+        pendingAttach.clear();
+        attachThumbs.clear();
+        renderAttachTray();
+        syncCostHint();
+    }
+
+    /**
+     * P29: the next-send price line — the user's "at least know what they
+     * are paying for so they can clear the context to make it cheaper".
+     * Math lives in CostMath (pure, pinned); this only assembles inputs:
+     * typed text + tray images + the hub's context depth + the picked
+     * model's input price. Hidden when there is nothing to send. The Σ
+     * pill is NEVER touched by this.
+     */
+    private void syncCostHint() {
+        if (costHint == null) return;
+        try {
+            String txt = input.getText().toString();
+            int n = pendingAttach.size();
+            if (txt.trim().isEmpty() && n == 0) {
+                if (costHint.getVisibility() != View.GONE)
+                    costHint.setVisibility(View.GONE);
+                return;
+            }
+            int avgW = 0, avgH = 0;
+            for (PendingImg p : pendingAttach) {
+                if (p.w > avgW) avgW = p.w;
+                if (p.h > avgH) avgH = p.h;
+            }
+            long ctx = RunHub.ctxTokens();
+            long newTok = CostMath.nextInputTokens(txt, n, avgW, avgH);
+            String[] sel = Models.selected(this);
+            boolean priceKnown = false;
+            double price = 0;
+            if (sel != null) {
+                Models.Mdl m = Models.find(Models.lastFetch(), sel[0], sel[1]);
+                if (m != null) {
+                    price = m.costIn;
+                    priceKnown = true;              // includes "known free"
+                }
+            }
+            double cost = CostMath.nextInputCost(ctx, newTok, price);
+            long limit = Models.resolveLimit(this, Models.lastFetch(),
+                    RunHub.selProviderPub(), RunHub.selModelPub());
+            String line = CostMath.hintLine(newTok, ctx, cost, priceKnown, limit);
+            if (line.isEmpty()) {
+                costHint.setVisibility(View.GONE);
+            } else {
+                costHint.setText(line);
+                if (costHint.getVisibility() != View.VISIBLE) {
+                    costHint.setVisibility(View.VISIBLE);
+                    costHint.setAlpha(0f);
+                    costHint.animate().alpha(1f).setDuration(140).start();
+                }
+            }
+        } catch (Exception e) {
+            costHint.setVisibility(View.GONE);      // a pricing hiccup never
+        }                                           // touches the composer
+    }
+    /** The image bubble — rounded frame, caption, tap for the big view. */
+    private View buildImageView(RunHub.Row r) {
+        boolean user = "user".equals(r.tool);
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams wlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        wlp.gravity = user ? Gravity.END : Gravity.START;
+        wlp.topMargin = dp(8);
+        wrap.setLayoutParams(wlp);
+
+        ImageView iv = new ImageView(this);
+        iv.setAdjustViewBounds(true);
+        iv.setMaxWidth(dp(240));
+        iv.setBackground(Theme.codeWell(this));
+        int ip = dp(4);
+        iv.setPadding(ip, ip, ip, ip);
+        Bitmap bm;
+        synchronized (RunHub.imageCache) { bm = RunHub.imageCache.get(r.key); }
+        if (bm != null && !bm.isRecycled()) {
+            iv.setImageBitmap(bm);
+        } else {
+            iv.setMinimumHeight(dp(80));
+            iv.setScaleType(ImageView.ScaleType.CENTER);
+            iv.setImageResource(android.R.drawable.ic_menu_report_image);
+            if (r.title != null) {
+                RunHub.retryDecode(r);
+            }
+        }
+        final RunHub.Row fr = r;
+        iv.setOnClickListener(v -> showImage(fr));
+        wrap.addView(iv);
+
+        if (r.text.length() > 0) {
+            TextView cap = text(11, R.color.text_secondary, false);
+            cap.setText(r.text.toString());
+            cap.setPadding(dp(2), dp(4), dp(2), 0);
+            cap.setMaxWidth(dp(240));
+            wrap.addView(cap);
+        }
+        return wrap;
+    }
+
+    /** Full-screen viewer for a chat image. */
+    private void showImage(RunHub.Row r) {
+        Bitmap bm;
+        synchronized (RunHub.imageCache) { bm = RunHub.imageCache.get(r.key); }
+        if (bm == null || bm.isRecycled()) return;
+        ImageView big = new ImageView(this);
+        big.setImageBitmap(bm);
+        big.setAdjustViewBounds(true);
+        big.setPadding(0, dp(12), 0, 0);
+        Sheet.show(this, "Image")
+                .add(big)
+                .pill("Close", Sheet.QUIET, null);
+    }
+
+    /** P18/P25: tap the Σ pill → what this number actually is. The pill
+     *  is CONTEXT DEPTH now — how full the model's window is — computed
+     *  from the last turn's token count; "$" stays the session's total
+     *  billed cost. When the window is heavy the one-button fix is here:
+     *  a fresh chat resets per-turn cost without touching history. */
+    private void spendPopover() {
+        long sumTok = RunHub.sessionTok();
+        double sumCost = RunHub.sessionCost();
+        long cachedTok = RunHub.sessionCacheRead();
+        // P42: the popover's "Now" must be the SAME number the pill shows
+        // — the run high-water while busy (raw last-turn reads low mid-run
+        // and the two surfaces disagreed until the run settled).
+        long lastTok = RunHub.ctxTokens();
+        // P42: the window cap must be reachable on a FRESH chat too — the
+        // early return below used to make the whole popover dead until
+        // the first turn billed something.
+        boolean noUsage = sumTok <= 0 && sumCost <= 0;
+        if (noUsage && RunHub.selModelPub() == null) return;
+        StringBuilder m = new StringBuilder();
+        m.append("The meter is CONTEXT DEPTH: how much of the model's ")
+         .append("window this conversation already fills. Every new turn ")
+         .append("re-reads the whole chat, so depth is what each NEW turn ")
+         .append("costs before the model writes a single word. \"$\" is ")
+         .append("what the provider billed for the whole session so far.\n\n");
+        long limit = Models.resolveLimit(this, Models.lastFetch(),
+                RunHub.selProviderPub(), RunHub.selModelPub());
+        // P41: when the two window sources disagree beyond ~20%, say so —
+        // the catalog can advertise several times more room than the
+        // sandbox enforces, and compaction fires on the SMALLER number
+        // (the one the meter now shows). The line sits right where the
+        // number is explained, before any cost talk.
+        String mismatch = CompactionPolicy.mismatchNote(
+                Models.serverLimitFor(Models.lastFetch(),
+                        RunHub.selProviderPub(), RunHub.selModelPub()),
+                Models.catalogLimitFor(Models.lastFetch(),
+                        RunHub.selProviderPub(), RunHub.selModelPub()));
+        if (mismatch != null) m.append(mismatch).append("\n\n");
+        if (lastTok > 0) {
+            m.append("Now: ~").append(Resilience.fmtTok(lastTok));
+            if (limit > 0) m.append(" of ").append(Resilience.fmtTok(limit));
+            m.append(" tokens in the window.\n\n");
+        }
+        // P27: the money question, answered with the session's own numbers.
+        // Prompt caching is automatic provider-side; these are the CACHED
+        // input tokens the provider reported — billed at the discounted
+        // rate, so they are the discount already being applied.
+        if (cachedTok > 0) {
+            m.append("Prompt cache: ").append(Resilience.fmtTok(cachedTok))
+             .append(" tokens of this session's input were served from the ")
+             .append("provider's cache (billed at the discounted rate) — ")
+             .append("caching is on and working.\n\n");
+        }
+        // P43: cache beats — the keepalive the field pointed at (the
+        // cachebeat idea), visible exactly where cache health is discussed.
+        String beatLine = CacheBeat.popoverLine(RunHub.beatsEnabled(), cachedTok);
+        if (!beatLine.isEmpty()) m.append(beatLine).append("\n");
+        // P31: the credit limit, where the money talk already lives.
+        double cap = RunHub.spendCap();
+        if (cap > 0) {
+            m.append("Credit limit: ").append(CreditLimit.stateLine(
+                    RunHub.spendTotal(), cap)).append(" (all-time, this device")
+             .append(" — set or clear it in Settings → Safety).\n\n");
+        } else if (RunHub.spendTotal() > 0) {
+            m.append("All-time spend on this device: ")
+             .append(CreditLimit.fmt(RunHub.spendTotal()))
+             .append(" (no credit limit set — Settings → Safety).\n\n");
+        }
+        String verdict = Resilience.contextVerdict(lastTok);
+        boolean heavy = limit > 0 ? lastTok * 100 / limit >= 50 : lastTok >= 50_000;
+        // P41: the warning the field never got — within 30% of the
+        // window the sandbox enforces. P45: the note now names the REAL
+        // consequence in the active mode — summarizing is close (auto on)
+        // or sends will fail with an overflow error (auto off, the
+        // default). Named before it happens, in the same breath as the
+        // numbers it comes from.
+        String risk = CompactionPolicy.riskNote(lastTok, limit,
+                AuthStore.compactionAuto(this));
+        if (risk != null) m.append(risk).append("\n");
+        if (!verdict.isEmpty()) m.append(verdict).append("\n");
+        // P42: when a user cap is in force, say so right where the
+        // window numbers are explained — it changes what "full" means.
+        long userCap = RunHub.selModelPub() == null ? 0
+                : AuthStore.contextLimit(this, RunHub.selProviderPub(),
+                        RunHub.selModelPub());
+        if (userCap > 0)
+            m.append("Your cap: ").append(Resilience.fmtTok(userCap))
+             .append(" tokens — this chat summarizes memory at that "
+             + "ceiling, not at the model's full window.\n\n");
+        // P42: the title mirrors the pill honestly — a fresh chat with no
+        // numbers yet shows just "Σ" instead of a fake "$0.0000".
+        String meterTxt = Resilience.contextMeter(lastTok, limit);
+        String sumTitle;
+        if (meterTxt.isEmpty() && sumCost <= 0) sumTitle = "Σ";
+        else if (meterTxt.isEmpty()) sumTitle = "Σ " + Resilience.fmtCost(sumCost);
+        else sumTitle = "Σ " + meterTxt
+                + (sumCost > 0 ? " · " + Resilience.fmtCost(sumCost) : "");
+        // P42-check: the popover can carry several paragraphs — on short
+        // screens a plain WRAP_CONTENT body grew past the top edge; the
+        // scroll cap keeps the title and the action pills reachable.
+        Sheet s = Sheet.show(this, sumTitle);
+        s.scroll(Sheet.note(this, m.toString()), 0.55f);
+        // P42: the slider — the cap belongs beside the meter that shows
+        // its effect (reachable even with no usage yet, see above).
+        if (s.showing()) {
+            s.pill("◈ Window cap", Sheet.QUIET, this::limitSheet);
+        }
+        // P29: /compact lives where the cost question is asked. The window
+        // drains WITHOUT losing the thread — the middle ground between
+        // "keep paying" and "fresh chat".
+        if (lastTok > 0 && s.showing()) {
+            s.pill("◈ Compact", Sheet.PRIMARY, () -> {
+                Theme.haptic(tvSpend);
+                RunHub.compact();
+            });
+        }
+        if (heavy && s.showing()) {
+            s.pill("＋ Fresh chat", Sheet.QUIET, () -> {
+                RunHub.loadSession(null);
+                sys("＋ fresh chat — the context (and per-turn cost) just reset; "
+                        + "the old chat is still in Sessions");
+            });
+        }
+        s.pill("Got it", Sheet.QUIET, null);
+    }
+
+    // ===================================================== P42 window cap
+
+    /** P42: the context-window cap editor — the slider the field asked
+     *  for. What it moves is the picked model's {@code limit.context}
+     *  in opencode.json (the exact number the sandbox believes and
+     *  enforces): the silent compaction fires at this ceiling and the Σ
+     *  meter's denominator follows once the server reports it back. The
+     *  write IS the user's own config edit; ContextPolicy keeps it in
+     *  sane bounds and tidies the config shells when cleared. */
+    private void limitSheet() {
+        final String pid = RunHub.selProviderPub();
+        final String mid = RunHub.selModelPub();
+        if (pid == null || mid == null) {
+            Toast.makeText(this, "pick a model first — the cap is per model",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final long effective = Models.resolveLimit(this, Models.lastFetch(), pid, mid);
+        final long saved = AuthStore.contextLimit(this, pid, mid);
+        Sheet sh = Sheet.show(this, "Context window cap");
+        if (!sh.showing()) return;
+        StringBuilder m = new StringBuilder();
+        m.append("The cap decides where this model's memory gets summarized: ")
+         .append("at the ceiling below instead of the model's full window (")
+         .append(effective > 0 ? Resilience.fmtTok(effective) : "unknown")
+         .append("). Lower cap = cheaper turns and earlier summarizing; ")
+         .append("higher = more room before compaction. It belongs to ")
+         .append(pid).append("/").append(mid)
+         .append(" and takes effect when the sandbox restarts.\n");
+        if (saved > 0)
+            m.append("\nCurrent cap: ").append(Resilience.fmtTok(saved))
+             .append(" tokens — Clear follows the model's own window again.");
+        sh.msg(m.toString());
+
+        final long min = ContextPolicy.MIN, max = ContextPolicy.MAX,
+                step = ContextPolicy.STEP;
+        final int maxProgress = (int) ((max - min) / step);
+        final long start = saved > 0 ? ContextPolicy.normalize(saved)
+                : (effective >= min && effective <= max ? effective : 200_000L);
+
+        final TextView val = new TextView(this);
+        val.setTypeface(Typeface.MONOSPACE);
+        val.setTextColor(Theme.cr(this, R.color.accent_light));
+        val.setTextSize(16);
+        val.setPadding(0, Theme.dp(this, 6), 0, Theme.dp(this, 2));
+
+        final android.widget.SeekBar bar = new android.widget.SeekBar(this);
+        bar.setMax(maxProgress);
+        // P42-check: tint the progress LAYER only — a whole-drawable
+        // filter painted track and fill the same accent, so the slider
+        // showed no visible progress. The thumb accessor is API 29+;
+        // minSdk 28 (Android 9) must not crash reaching for it.
+        int tint = Theme.cr(this, R.color.accent);
+        android.graphics.drawable.Drawable progressFill =
+                ((android.graphics.drawable.LayerDrawable) bar.getProgressDrawable())
+                        .findDrawableByLayerId(android.R.id.progress);
+        if (progressFill != null)
+            progressFill.setColorFilter(tint, android.graphics.PorterDuff.Mode.SRC_IN);
+        if (android.os.Build.VERSION.SDK_INT >= 29)
+            bar.getThumb().setColorFilter(tint, android.graphics.PorterDuff.Mode.SRC_IN);
+        bar.setPadding(Theme.dp(this, 8), 0, Theme.dp(this, 8), 0);
+
+        Runnable showVal = () -> val.setText(Resilience.fmtTok(
+                ContextPolicy.normalize(min + (long) bar.getProgress() * step))
+                + " tokens");
+        bar.setProgress((int) ((start - min) / step));
+        showVal.run();
+        bar.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(android.widget.SeekBar b, int p, boolean u) {
+                showVal.run();
+            }
+            public void onStartTrackingTouch(android.widget.SeekBar b) {}
+            public void onStopTrackingTouch(android.widget.SeekBar b) {}
+        });
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.addView(val, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+        box.addView(bar, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        // presets — the house style: tap-first, type-never
+        LinearLayout presets = new LinearLayout(this);
+        presets.setOrientation(LinearLayout.HORIZONTAL);
+        for (long p : ContextPolicy.PRESETS) {
+            TextView chip = new TextView(this);
+            chip.setText(Resilience.fmtTok(p));
+            chip.setTypeface(Typeface.MONOSPACE);
+            chip.setTextSize(12);
+            chip.setTextColor(Theme.cr(this, R.color.text_secondary));
+            chip.setPadding(Theme.dp(this, 10), Theme.dp(this, 6),
+                    Theme.dp(this, 10), Theme.dp(this, 6));
+            chip.setBackground(Theme.ghostCard(this));
+            chip.setGravity(Gravity.CENTER);      // P42-check: weight=1 stretches
+            chip.setSingleLine(true);             // the cell — center, never wrap
+            chip.setOnClickListener(v -> {
+                bar.setProgress((int) ((p - min) / step));
+                showVal.run();
+            });
+            presets.addView(chip, new LinearLayout.LayoutParams(0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        }
+        box.addView(presets, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+        sh.add(box);
+
+        sh.pill("Apply & restart sandbox", Sheet.PRIMARY, () -> {
+            long n = ContextPolicy.normalize(min + (long) bar.getProgress() * step);
+            try {
+                AuthStore.setContextLimit(this, pid, mid, n);
+                Toast.makeText(this, "cap → " + Resilience.fmtTok(n)
+                        + " · restarting the sandbox", Toast.LENGTH_SHORT).show();
+                sh.dismiss();
+                ServerService.restart(this);
+            } catch (Exception ex) {
+                Toast.makeText(this, "could not write the cap: " + ex.getMessage(),
+                        Toast.LENGTH_LONG).show();
+            }
+        });
+        if (saved > 0) {
+            sh.pill("Clear cap", Sheet.QUIET, () -> {
+                try {
+                    AuthStore.setContextLimit(this, pid, mid, 0);
+                    Toast.makeText(this, "cap cleared — the model's own window "
+                            + "applies after a restart", Toast.LENGTH_LONG).show();
+                    sh.dismiss();
+                } catch (Exception ex) {
+                    Toast.makeText(this, "could not clear the cap: " + ex.getMessage(),
+                            Toast.LENGTH_LONG).show();
+                }
+            });
+        }
+        sh.pill("Got it", Sheet.QUIET, null);
+    }
+
+    private void sys(String s) {
+        RunHub.sys(s);     // P25: a model row — survives screen changes
+    }
+
+    private void err(String title, String detail, String raw) {
+        RunHub.err(title, detail, raw);
+    }
+
+    // ------------------------------------------------------------ views
+
+    private boolean needFullRender;
+    /** P12: key of the row whose open-state the user just toggled — the
+     *  rebuild gets an "unfold" animation instead of a flat swap. */
+    private String lastToggled;
+
+    /** Rebuild the view for one row (or append it) — main thread only.
+     *  P9: text rows update their cached TextView in place; only the
+     *  streaming tail animates char-by-char via the smoother. */
+    private void touchView(RunHub.Row r) {
+        // P21 keyboard guard: a row swap must never detach the IME from
+        // the chat box — if the input held focus before the mutation and
+        // lost it during, take it straight back.
+        boolean hadFocus = input != null && input.hasFocus();
+        touchViewInner(r);
+        if (hadFocus && input != null && !input.hasFocus()
+                && !isFinishing() && !isDestroyed()) {
+            input.requestFocus();
+        }
+    }
+
+    private void touchViewInner(RunHub.Row r) {
+        if (needFullRender) { renderAll(); return; }
+        List<RunHub.Row> rs = RunHub.rows();
+        Integer i = r.key == null ? null : RunHub.idx().get(r.key);
+        if (i == null || i >= rs.size() || rs.get(i) != r) { renderAll(); return; }
+        int idx = i;
+        int len = r.text.length();
+        if (r.shown > len) r.shown = len;
+
+        // P47: deltas grow the row at token rate (message.part.delta).
+        // Once the row's view exists, hand every further growth to the
+        // smoother and let the ticker paint it IN PLACE — a full view
+        // rebuild per token is the jank path; the P20 collapsed-thought
+        // fast path proved the pattern, this generalizes it to every
+        // streamed row (motion on or off — the ticker is a plain text
+        // painter, not an animation).
+        if ((r.kind == K_ASSISTANT || r.kind == K_REASON)
+                && r.shown < len
+                && bodyByKey.containsKey(r.key)
+                && viewByKey.containsKey(r.key)) {
+            startSmoother();
+            autoscroll();
+            return;
+        }
+
+        if ((r.kind == K_ASSISTANT || r.kind == K_REASON)
+                && r.shown < len && isStreamingTail(r)) {
+            // hand the row to the smoother: first paint shows the tail view
+            View nv = buildRowView(r);
+            if (idx < list.getChildCount()) {
+                list.removeViewAt(idx);
+                list.addView(nv, idx);
+            } else if (idx == list.getChildCount()) {
+                list.addView(nv);
+            } else {
+                renderAll();
+                return;
+            }
+            startSmoother();
+            autoscroll();
+            return;
+        }
+
+        // not streaming: everything painted now
+        // P49: — EXCEPT a caught-up streaming view. The flush path (the
+        // boundary snapshots) used to land HERE with shown == len and
+        // rebuild the whole row: the exact per-burst markdown render the
+        // quiet finalize exists to prevent. While the cheap caret view
+        // is what's on screen, that rebuild belongs to the finalize.
+        // A click the user just made (lastToggled) bypasses — the card
+        // answers NOW.
+        if (r.key != null && (r.kind == K_ASSISTANT || r.kind == K_REASON)
+                && liveStreamViews.contains(r.key)
+                && !r.key.equals(lastToggled)) {
+            scheduleFinalize(r);
+            return;
+        }
+        r.shown = len;
+        View nv = buildRowView(r);
+        boolean toggled = r.key != null && r.key.equals(lastToggled);
+        if (idx < list.getChildCount()) {
+            list.removeViewAt(idx);
+            list.addView(nv, idx);   // streaming update — instant, no animation
+            if (toggled && (r.kind == K_TOOL || r.kind == K_REASON || r.kind == K_LIVE)) {
+                lastToggled = null;
+                Theme.unfold(nv);    // P12: expand/collapse feels physical
+            }
+        } else if (idx == list.getChildCount()) {
+            list.addView(nv);
+            if (Theme.motionOn(this)) {
+                if (r.kind == K_USER) Theme.springIn(nv);  // P12: bubbly pop
+                else Theme.appear(nv);
+            }
+        } else {
+            renderAll();
+        }
+        syncEmpty();
+    }
+
+    /** P25: model trim moved to RunHub (rows stay capped even with no
+     *  view bound). The view learns about trims through hubReset(). */
+
+    private void renderAll() {
+        boolean hadFocus = input != null && input.hasFocus();
+        renderAllInner();
+        if (hadFocus && input != null && !input.hasFocus()
+                && !isFinishing() && !isDestroyed()) {
+            input.requestFocus();
+        }
+    }
+
+    private void renderAllInner() {
+        List<RunHub.Row> snapshot;
+        synchronized (lock) {
+            snapshot = new ArrayList<>(rows);
+            needFullRender = false;
+            viewByKey.clear(); bodyByKey.clear(); metaByKey.clear();
+            liveStreamViews.clear();          // P49: fresh render, fresh stages
+            pacerByKey.clear();                 // P43: fresh render, fresh pace
+            paintPrefix.clear();                // P52: fresh render, fresh caret
+            for (RunHub.Row r : snapshot) r.shown = r.text.length(); // history: no caret
+        }
+        list.removeAllViews();
+        for (RunHub.Row r : snapshot) {
+            // P24: Throwable breadth (was catch(Exception)) — an Error row
+            // becomes the fallback line instead of leaving the list
+            // HALF-BUILT (removeAllViews already ran): the exact "chat
+            // survived but won't work" field state.
+            final RunHub.Row fr = r;
+            Throwable rt = Resilience.guard(() -> list.addView(buildRowView(fr)));
+            if (rt == null) continue;
+            Trail.record(this, "row render", rt);
+            TextView tv = mono(new TextView(this), 12);
+            tv.setText(Resilience.quarantineLine());
+            list.addView(tv);
+        }
+        syncEmpty();
+        autoscroll();
+    }
+
+    private void setAllOpen(boolean open) {
+        synchronized (lock) {
+            for (RunHub.Row r : rows) {
+                if (r.kind == K_TOOL || r.kind == K_REASON) r.open = open;
+            }
+        }
+        renderAll();
+    }
+
+    private TextView text(int sizeSp, int colorRes, boolean bold) {
+        TextView tv = new TextView(this);
+        tv.setTextSize(sizeSp);
+        tv.setTextColor(Theme.cr(this, colorRes));
+        if (bold) tv.setTypeface(Typeface.DEFAULT_BOLD);
+        return tv;
+    }
+
+    private TextView mono(TextView tv, int sizeSp) {
+        tv.setTypeface(Typeface.MONOSPACE);
+        tv.setTextSize(sizeSp);
+        return tv;
+    }
+
+    private LinearLayout card() {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setBackgroundResource(R.drawable.bg_card);
+        int p = dp(10);
+        c.setPadding(p, p, p, p);
+        return c;
+    }
+
+    private int dp(int v) {
+        return (int) (v * getResources().getDisplayMetrics().density);
+    }
+
+    private View buildRowView(RunHub.Row r) {
+        switch (r.kind) {
+            case K_USER: {
+                LinearLayout wrap = new LinearLayout(this);
+                wrap.setOrientation(LinearLayout.HORIZONTAL);
+                TextView tv = text(15, R.color.user_text, false);
+                // P45: the Claude-Android bubble — fully rounded neutral
+                // graphite pill (no tail, no accent shout), right-aligned.
+                tv.setBackground(Theme.userBubble(this));
+                int p = dp(14);
+                tv.setPadding(p, dp(10), p, dp(10));
+                tv.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.78));
+                tv.setText(r.text.toString());
+                tv.setTextIsSelectable(true);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+                lp.gravity = Gravity.END;
+                lp.topMargin = dp(8);
+                tv.setLayoutParams(lp);
+                Theme.press(tv);
+                tv.setOnLongClickListener(v -> {
+                    copyText(r.text.toString(), "message");
+                    return true;
+                });
+                wrap.addView(tv);
+                return wrap;
+            }
+            case K_ASSISTANT: {
+                boolean blankText = RunHub.blankText(r.text);
+                if (blankText && (r.meta == null || r.meta.isEmpty())) {
+                    // P37: a content-less text part (tool-only assistant
+                    // rounds, the shell before an early error) must not
+                    // paint a padded empty box — the empty-item /
+                    // weird-gap field reports. Zero footprint, and no
+                    // ghost view registrations left behind.
+                    LinearLayout g = new LinearLayout(this);
+                    g.setVisibility(View.GONE);
+                    String gk = r.key == null ? "" : r.key;
+                    viewByKey.remove(gk);
+                    bodyByKey.remove(gk);
+                    metaByKey.remove(gk);
+                    return g;
+                }
+                LinearLayout box = new LinearLayout(this);
+                box.setOrientation(LinearLayout.VERTICAL);
+                box.setPadding(dp(2), blankText ? dp(4) : dp(10), 0, dp(2));
+                boolean streaming = r.shown < r.text.length();
+                // P45: the Claude response marker — the small accent ✦ sits
+                // above the response text, the quiet signature of the
+                // assistant's block (the app's own glyph vocabulary, kept).
+                if (!blankText) {
+                    TextView mark = text(12, R.color.accent_light, false);
+                    mark.setText("✦");
+                    mark.setPadding(0, 0, 0, dp(3));
+                    box.addView(mark);
+                }
+                TextView body = text(15, R.color.text_primary, false);
+                body.setTextIsSelectable(true);
+                body.setLineSpacing(dp(1), 1f);
+                if (blankText) {
+                    // P37: blank text that still carries a token footer →
+                    // paint the compact footer only (no box, no dots).
+                } else if (streaming) {
+                    // plain tail with caret — cheap, re-painted by the smoother
+                    int upto = Math.min(r.shown, r.text.length());
+                    String s = r.text.substring(0, upto);
+                    // P52: seed the caret-stage cache (editable body) so the
+                    // next tick APPENDS the delta instead of re-copying.
+                    if (r.key != null) paintPrefix.put(r.key, upto);
+                    body.setText(s.length() == 0 ? "…" : s + "▍",
+                            TextView.BufferType.EDITABLE);
+                } else {
+                    CharSequence md;
+                    try {
+                        final ChatActivity self = this;
+                        Markdown.MentionResolver mres = new Markdown.MentionResolver() {
+                            @Override public String resolve(String candidate) {
+                                return self.resolveMention(candidate);
+                            }
+                            @Override public void open(String abs) {
+                                self.openInFiles(abs);
+                            }
+                        };
+                        String full = NoteStrip.trimTail(r.text.toString());
+                        if (full.length() > 30000) {
+                            // P-fix: Markdown.render fast-paths >30000 chars
+                            // to raw text; render a bounded prefix richly and
+                            // append the remainder as plain text instead of
+                            // dropping all formatting.
+                            SpannableStringBuilder sb = new SpannableStringBuilder(
+                                    Markdown.render(full.substring(0, 30000), mres));
+                            sb.append("\n…\n");
+                            sb.append(full, 30000, full.length());
+                            md = sb;
+                        } else {
+                            md = Markdown.render(full, mres);
+                        }
+                    }
+                    catch (Exception e) { md = NoteStrip.trimTail(r.text.toString()); }
+                    body.setText(md.length() == 0 ? "…" : md);
+                    // P28: the field fix — P27 rendered the accent+underline
+                    // mention links but nothing ever fired their taps (the
+                    // rows have no movement method). Hit-test routing keeps
+                    // selection + long-press copy + scroll drags native.
+                    if (Markdown.hasLinks(md)) Markdown.enableSpanTaps(body);
+                    body.setOnLongClickListener(v -> {
+                        copyText(NoteStrip.trimTail(r.text.toString()), "response");
+                        return true;
+                    });
+                }
+                if (!blankText) box.addView(body);
+                if (r.meta != null && !r.meta.isEmpty()) {
+                    TextView meta = text(11, R.color.text_secondary, false);
+                    meta.setText(r.meta);
+                    meta.setPadding(0, dp(blankText ? 1 : 3), 0, dp(blankText ? 2 : 6));
+                    box.addView(meta);
+                }
+                String key = r.key == null ? "" : r.key;
+                viewByKey.put(key, box);
+                if (!blankText) bodyByKey.put(key, body);
+                TextView m = r.meta == null ? null
+                        : (TextView) box.getChildAt(box.getChildCount() - 1);
+                if (m != null && m != body) metaByKey.put(key, m);
+                // P49: the caret stage is a tracked state — the flush guard
+                // routes caught-up repaints to the quiet finalize while it
+                // stands, and the finalize itself retires it.
+                if (streaming && !blankText) liveStreamViews.add(key);
+                else liveStreamViews.remove(key);
+                return box;
+            }
+            case K_REASON: {
+                // P10: "voice of mind" — violet-tinted panel, ✦ header,
+                // italic body when open. Distinct from tool cards at a glance.
+                // P20: while this row is the streaming tail the card is
+                // ALIVE — collapsed it grows a one-line ticker of the
+                // freshest thinking (token-by-token via the smoother);
+                // open, the body itself streams with the caret.
+                LinearLayout c = new LinearLayout(this);
+                c.setOrientation(LinearLayout.VERTICAL);
+                c.setBackground(Theme.thoughtCard(this));
+                int cp = dp(13);
+                c.setPadding(cp, dp(10), cp, dp(12));
+
+                LinearLayout head = new LinearLayout(this);
+                head.setOrientation(LinearLayout.HORIZONTAL);
+                head.setGravity(Gravity.CENTER_VERTICAL);
+                TextView spark = text(13, R.color.accent_light, false);
+                spark.setText("✦");
+                spark.setPadding(0, 0, dp(7), 0);
+                head.addView(spark);
+                TextView h = text(11, R.color.accent_light, true);
+                h.setText(r.text.length() == 0 ? "THINKING…" : "THINKING");
+                h.setLetterSpacing(0.14f);
+                head.addView(h, new LinearLayout.LayoutParams(0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+                TextView chev = text(11, R.color.text_secondary, false);
+                chev.setText(r.open ? "▾" : "▸");
+                head.addView(chev);
+                c.addView(head);
+                String key = r.key == null ? "" : r.key;
+                boolean streaming = r.shown < r.text.length();
+                r.livePreview = false;
+                if (r.open) {
+                    TextView body = text(13, R.color.text_secondary, false);
+                    body.setTypeface(Typeface.create("sans-serif", Typeface.ITALIC));
+                    body.setTextIsSelectable(true);
+                    body.setLineSpacing(dp(2), 1f);
+                    String t;
+                    if (streaming) {
+                        int upto = Math.min(r.shown, r.text.length());
+                        t = r.text.substring(0, upto);
+                    } else {
+                        t = r.text.toString();
+                        if (t.length() > 20000) t = t.substring(0, 20000) + "…";
+                    }
+                    // P52: keep the open thought on the incremental caret
+                    // stage too (seed = chars already painted, caret off).
+                    if (streaming) {
+                        if (r.key != null) {
+                            paintPrefix.put(r.key, Math.min(r.shown, r.text.length()));
+                        }
+                        body.setText(t.length() == 0 ? "…" : t + "▍",
+                                TextView.BufferType.EDITABLE);
+                    } else {
+                        body.setText(t.length() == 0 ? "…" : t);
+                    }
+                    body.setPadding(dp(2), dp(8), 0, 0);
+                    c.addView(body);
+                    viewByKey.put(key, c);
+                    bodyByKey.put(key, body);
+                    if (streaming) liveStreamViews.add(key);     // P49 stage tracking
+                    else liveStreamViews.remove(key);
+                } else if (streaming) {
+                    // P43: the live thought is now a REAL window — three
+                    // lines of the freshest reasoning, tail-anchored, not
+                    // a single flashing line. Raw thought (never a
+                    // summary), gliding via the pacer.
+                    TextView live = text(12, R.color.text_secondary, false);
+                    live.setTypeface(Typeface.create("sans-serif", Typeface.ITALIC));
+                    // P48: the window is a FIXED-LENGTH stage — exactly three
+                    // lines, no more, no fewer. The old card was maxLines(3)
+                    // only, so the sliding window changed line count on every
+                    // reveal and the whole list bounced with it. Reserved
+                    // height = zero layout surprises for the neighbors.
+                    live.setMinLines(3);
+                    live.setMaxLines(3);
+                    live.setEllipsize(android.text.TextUtils.TruncateAt.START);
+                    String win = Resilience.thinkWindow(r.text.toString(),
+                            Math.min(r.shown, r.text.length()), 240);
+                    live.setText(win.length() == 0 ? "…" : win + "▍");
+                    live.setPadding(dp(2), dp(6), 0, 0);
+                    live.setAlpha(0.85f);
+                    c.addView(live);
+                    viewByKey.put(key, c);
+                    bodyByKey.put(key, live);
+                    liveStreamViews.add(key);        // P49 stage tracking
+                    r.livePreview = true;
+                } else {
+                    viewByKey.remove(key);          // P20: never leave a ghost
+                    bodyByKey.remove(key);          // registration behind
+                    liveStreamViews.remove(key);    // P49: the stage retired too
+                }
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+                lp.topMargin = dp(8);
+                c.setLayoutParams(lp);
+                head.setOnClickListener(v -> { r.open = !r.open; lastToggled = r.key; touchView(r); });
+                return c;
+            }
+            case K_TOOL: {
+                // P10: icon-disc tool card — colored glyph disc, name +
+                // status line, rounded code blocks for input/output.
+                boolean failed = "error".equals(r.status);
+                boolean running = "running".equals(r.status) || "pending".equals(r.status);
+                LinearLayout c = new LinearLayout(this);
+                c.setOrientation(LinearLayout.VERTICAL);
+                c.setBackground(failed
+                        ? Theme.errCard(this) : Theme.toolCard(this));
+                int cp = dp(11);
+                c.setPadding(cp, cp, cp, cp);
+
+                LinearLayout head = new LinearLayout(this);
+                head.setOrientation(LinearLayout.HORIZONTAL);
+                head.setGravity(Gravity.CENTER_VERTICAL);
+
+                TextView disc = text(12, R.color.on_accent, true);
+                disc.setTextColor(Theme.ON_DISC);   // token — P27 no inline hex
+                disc.setText(toolGlyph(r.tool));
+                disc.setGravity(Gravity.CENTER);
+                disc.setBackground(Theme.circle(toolTint(r.tool, failed)));
+                int ds = dp(28);
+                LinearLayout.LayoutParams dlp2 = new LinearLayout.LayoutParams(ds, ds);
+                dlp2.rightMargin = dp(10);
+                disc.setLayoutParams(dlp2);
+                head.addView(disc);
+
+                LinearLayout mid = new LinearLayout(this);
+                mid.setOrientation(LinearLayout.VERTICAL);
+                TextView name = text(13, R.color.text_primary, true);
+                name.setText(toolLabel(r.tool));
+                mid.addView(name);
+                TextView st = text(11, failed ? R.color.err
+                        : running ? R.color.warn : R.color.text_secondary, false);
+                String word = failed ? "error"
+                        : "completed".equals(r.status) ? "done"
+                        : (r.status == null || r.status.isEmpty()) ? ""
+                        : r.status + "…";
+                st.setText((r.title == null || r.title.isEmpty() ? "" : r.title)
+                        + (word.isEmpty() ? "" : (r.title == null || r.title.isEmpty() ? "" : "  ·  ") + word));
+                st.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.60));
+                st.setSingleLine(true);
+                st.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+                mid.addView(st);
+                head.addView(mid, new LinearLayout.LayoutParams(0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+                TextView chev = text(12, R.color.text_secondary, false);
+                chev.setText(r.open ? "▾" : "▸");
+                chev.setPadding(dp(6), 0, 0, 0);
+                head.addView(chev);
+                c.addView(head);
+
+                if (r.open) {
+                    if (r.input.length() > 0) {
+                        c.addView(label("input"));
+                        c.addView(codeBlock(r.input.toString(), 12000));
+                    }
+                    if (r.output.length() > 0) {
+                        c.addView(label("output"));
+                        c.addView(codeBlock(r.output.toString(), 12000));
+                    }
+                    if (failed) {
+                        View dns = dnsHint(r.output);
+                        if (dns != null) c.addView(dns);
+                    }
+                    // P27 phase 4: tap-through to the Files viewer for the
+                    // file this tool touched — added as its OWN row so it
+                    // never conflicts with the head/card toggle. Only when
+                    // the file still exists in the serving dir.
+                    String touched = Mentions.toolFilePath(r.tool, r.title);
+                    if (touched != null) {
+                        final String abs = touched;
+                        TextView open = text(12, R.color.accent_light, true);
+                        open.setText("↗ open in Files");
+                        open.setBackgroundResource(R.drawable.bg_chip);
+                        int op = dp(10);
+                        open.setPadding(op, dp(6), op, dp(6));
+                        LinearLayout.LayoutParams olp = new LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT);
+                        olp.topMargin = dp(8);
+                        open.setLayoutParams(olp);
+                        Theme.press(open);
+                        open.setOnClickListener(v -> openInFiles(abs));
+                        c.addView(open);
+                        // P31: the interactive canvas — a write/edit that
+                        // produced an .html page grows a ▶ chip so the page
+                        // opens in the sandboxed viewer (JS on, no file or
+                        // content access). Never auto-opens; the user taps.
+                        if (CanvasDoc.isRenderable(abs)) {
+                            TextView play = text(12, R.color.accent_light, true);
+                            play.setText("▶ interactive"
+                                    + RenderCheck.chipSuffix(abs));
+                            play.setBackgroundResource(R.drawable.bg_chip);
+                            play.setPadding(op, dp(6), op, dp(6));
+                            LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                                    ViewGroup.LayoutParams.WRAP_CONTENT);
+                            plp.topMargin = dp(8);
+                            plp.leftMargin = dp(8);
+                            play.setLayoutParams(plp);
+                            Theme.press(play);
+                            play.setOnClickListener(v -> openCanvas(abs));
+                            c.addView(play);
+                        }
+                    }
+                }
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+                lp.topMargin = dp(8);
+                c.setLayoutParams(lp);
+                Theme.press(c);
+                head.setOnClickListener(v -> { r.open = !r.open; lastToggled = r.key; touchView(r); });
+                c.setOnClickListener(v -> { r.open = !r.open; lastToggled = r.key; touchView(r); });
+                return c;
+            }
+            // P26: K_LIVE never appears in the transcript anymore (the
+            // tree lives in the pinned footer) — defensive no-op.
+            case K_LIVE:
+                return new View(this);
+            case K_IMAGE:
+                return buildImageView(r);
+            case K_ERR: {
+                LinearLayout c = new LinearLayout(this);
+                c.setOrientation(LinearLayout.VERTICAL);
+                c.setBackground(Theme.errCard(this));
+                int p = dp(12);
+                c.setPadding(p, dp(10), p, dp(10));
+                TextView t1 = text(13, R.color.err, true);
+                t1.setText("✕  " + r.text);
+                c.addView(t1);
+                if (r.output.length() > 0) {
+                    TextView t2 = text(12, R.color.text_secondary, false);
+                    t2.setText("tap for details");
+                    t2.setPadding(0, dp(3), 0, 0);
+                    c.addView(t2);
+                }
+                View dns = dnsHint(r.text, r.output);
+                if (dns != null) c.addView(dns);
+                c.setOnClickListener(v -> Sheet.show(this, r.text.toString())
+                        .msg(r.output.toString())
+                        .pill("Copy", Sheet.PRIMARY, () -> {
+                            copyText(r.output.toString(), "error");
+                        })
+                        .pill("Close", Sheet.QUIET, null));
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+                lp.topMargin = dp(8);
+                c.setLayoutParams(lp);
+                return c;
+            }
+            default: {
+                // K_SYS — centered dim pill
+                TextView tv = text(11, R.color.text_secondary, false);
+                tv.setText(r.text.toString());
+                tv.setGravity(Gravity.CENTER_HORIZONTAL);
+                tv.setBackground(Theme.sysPill(this));
+                int p = dp(12);
+                tv.setPadding(p, dp(6), p, dp(6));
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+                lp.topMargin = dp(8);
+                lp.bottomMargin = dp(2);
+                tv.setLayoutParams(lp);
+                return tv;
+            }
+        }
+    }
+
+    private TextView label(String s) {
+        TextView tv = text(10, R.color.text_secondary, false);
+        tv.setText(s.toUpperCase(Locale.US));
+        tv.setLetterSpacing(0.1f);
+        // clipping audit: letterspaced caps carry a trailing advance —
+        // match it with end padding so the last glyph never kisses the
+        // next element (a code block's first line here).
+        tv.setPadding(0, dp(8), dp(3), dp(2));
+        return tv;
+    }
+
+    /** P9: friendly tool names on the cards. */
+    private static String toolLabel(String tool) {
+        if (tool == null || tool.isEmpty()) return "tool";
+        switch (tool) {
+            case "bash": return "shell";
+            case "read": return "read file";
+            case "write": return "write file";
+            case "edit": return "edit file";
+            case "patch": return "patch";
+            case "glob": return "find files";
+            case "grep": return "search";
+            case "list": return "list files";
+            case "webfetch": return "web fetch";
+            case "todowrite": return "plan";
+            case "task": return "sub-agent";
+            default: return tool.toLowerCase(Locale.US);
+        }
+    }
+
+    /** P10: single glyph for a tool's icon disc (safe, common symbols). */
+    private static String toolGlyph(String tool) {
+        if (tool == null || tool.isEmpty()) return "⚙";
+        switch (tool) {
+            case "bash": return "$";
+            case "read":
+            case "list": return "≡";
+            case "write":
+            case "edit":
+            case "patch": return "✎";
+            case "glob":
+            case "grep": return "∗";
+            case "webfetch": return "→";
+            case "todowrite": return "✓";
+            case "task": return "◆";
+            default: return "⚙";
+        }
+    }
+
+    /** P10: icon-disc tint per tool — P27: the ten-hue rainbow (indigo,
+     *  sky, emerald, violet, amber, cyan, pink…) was the loudest accent
+     *  sprawl on the screen; the GLYPH already says which tool ran. Now:
+     *  the ONE accent for every tool, danger for failures — the same
+     *  family everything else live/interactive uses. */
+    private static int toolTint(String tool, boolean failed) {
+        if (failed) return Theme.TINT_DANGER;
+        if ("todowrite".equals(tool)) return Theme.TINT_OK;
+        return Theme.TINT_ACCENT;
+    }
+
+    /** P10: rounded, hairline code block used for tool input/output. */
+    private TextView codeBlock(String content, int maxLen) {
+        TextView tv = mono(text(12, R.color.text_primary, false), 12);
+        String t = content;
+        if (t.length() > maxLen) t = t.substring(0, maxLen) + "…\n(+" + (content.length() - maxLen) + " more chars — long-press to copy all)";
+        tv.setText(t);
+        // P14: NOT textIsSelectable — selectable spans make TextViews measure
+        // and lay out an order of magnitude slower, and a 12k-char block
+        // rebuilt on every streaming tick was the "chat bugs out when long
+        // commands fill it" report. Long-press copies the full text instead.
+        tv.setTextIsSelectable(false);
+        tv.setLongClickable(true);
+        tv.setOnLongClickListener(v -> {
+            copyText(content, "code");
+            return true;
+        });
+        tv.setBackground(Theme.codeWell(this));
+        int p = dp(10);
+        tv.setPadding(p, p, p, p);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(2);
+        tv.setLayoutParams(lp);
+        return tv;
+    }
+
+    /** P-fix: when an error/tool output reads as a DNS resolution failure,
+     *  surface one small tappable chip that turns on the documented DNS
+     *  bridge and restarts the server. Stateless: the decision is made
+     *  from the rendered text alone, no new row field. Returns null when
+     *  the text is not a DNS failure or the bridge is already on. */
+    private View dnsHint(CharSequence... sources) {
+        try {
+            StringBuilder sb = new StringBuilder();
+            for (CharSequence s : sources) {
+                if (s == null) continue;
+                int n = Math.min(s.length(), 8000);
+                sb.append(s, 0, n).append(' ');
+            }
+            String low = sb.toString().toLowerCase(Locale.US);
+            boolean dns = low.contains("could not resolve")
+                    || low.contains("enotfound")
+                    || low.contains("getaddrinfo")
+                    || low.contains("nodename nor servname")
+                    || low.contains("temporary failure in name resolution")
+                    || low.contains("name or service not known")
+                    || low.contains("could not resolve host")
+                    || low.contains("dns resolution")
+                    || low.contains("dns lookup")
+                    || low.contains("dns error")
+                    || low.contains("dns server");
+            if (!dns) return null;
+            if (getSharedPreferences("oc", MODE_PRIVATE)
+                    .getBoolean("dns_bridge", false)) return null;
+            TextView hint = text(12, R.color.accent_light, true);
+            hint.setText("⚠ DNS error — enable DNS bridge?");
+            hint.setBackgroundResource(R.drawable.bg_chip);
+            int hp = dp(10);
+            hint.setPadding(hp, dp(6), hp, dp(6));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.topMargin = dp(8);
+            hint.setLayoutParams(lp);
+            Theme.press(hint);
+            hint.setOnClickListener(v -> {
+                Theme.haptic(v);
+                try {
+                    getSharedPreferences("oc", MODE_PRIVATE).edit()
+                            .putBoolean("dns_bridge", true).apply();
+                } catch (Exception ignored) {}
+                Toast.makeText(ChatActivity.this,
+                        "DNS bridge on — restarting server…",
+                        Toast.LENGTH_SHORT).show();
+                ServerService.restart(ChatActivity.this);
+            });
+            return hint;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void copyText(String s, String label) {
+        ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        cm.setPrimaryClip(ClipData.newPlainText(label, s));
+        Toast.makeText(this, "copied", Toast.LENGTH_SHORT).show();
+    }
+
+    // ------------------------------------------ P27: tappable file mentions
+
+    /** The mention resolver the markdown renderer calls back: candidate →
+     *  absolute path, but ONLY when the file actually exists in (or under)
+     *  the serving directory right now. Non-existent mentions stay plain
+     *  text. Never throws — a resolver hiccup must not break the row. */
+    private String resolveMention(String candidate) {
+        try {
+            String root = ServerService.servingDir() != null
+                    ? ServerService.servingDir().getAbsolutePath() : null;
+            String abs = Mentions.resolve(root, candidate);
+            return (abs != null && new File(abs).isFile()) ? abs : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Deep-link the EXISTING Files viewer to one file (phase 4 contract:
+     *  reuse, never rebuild). Back from Files returns here — same task
+     *  stack, scroll position untouched. */
+    private void openInFiles(String abs) {
+        if (abs == null) return;
+        File f = new File(abs);
+        if (!f.isFile()) {
+            Toast.makeText(this, "file no longer exists", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Theme.pop(findViewById(R.id.list));
+        Intent i = new Intent(this, FilesActivity.class);
+        i.putExtra("open", abs);
+        startActivity(i);
+        overridePendingTransition(R.anim.slide_in_right, R.anim.fade_out);
+    }
+
+    // ------------------------------------------------------- permissions
+
+    // P14: unattended mode — ids already auto-answered this session, so a
+    // failed reply falls back to the card instead of looping forever.
+    private final java.util.Set<String> autoReplied = new java.util.HashSet<>();
+
+    private boolean autoAllowOn() {
+        return getSharedPreferences("oc", MODE_PRIVATE)
+                .getBoolean("auto_allow", false);
+    }
+
+    private void setAutoAllow(boolean on) {
+        getSharedPreferences("oc", MODE_PRIVATE).edit()
+                .putBoolean("auto_allow", on).apply();
+        sys(on ? "⏵ unattended mode ON — tool approvals auto-allowed"
+              : "⏵ unattended mode OFF — approvals ask again");
+        if (!on) autoReplied.clear();
+        checkPermissionQueue();
+    }
+
+    private void checkPermissionQueue() {
+        Map<String, Object> perm = ServerService.peekPermission();
+        if (perm == null) {
+            permSlot.setVisibility(View.GONE);
+            permSlot.removeAllViews();
+            return;
+        }
+        // P14/P25: AUTO-ALLOW (unattended mode) — answering moved to
+        // RunHub, which reacts to permission EVENTS with no screen bound
+        // (the agent can never stall while the user is elsewhere). This
+        // path covers a permission already queued when the toggle flipped:
+        // the hub dedupes via its own autoReplied + tombstones.
+        if (autoAllowOn()) {
+            final String id = Json.str(perm, "id");
+            String action = nz(Json.str(perm, "permission"),
+                    nz(Json.str(perm, "type"), "tool"));
+            if (id != null && !autoReplied.contains(id)
+                    && !RunHub.autoAlready(id)) {
+                if (autoReplied.size() > 400) autoReplied.clear();
+                autoReplied.add(id);
+                RunHub.answerPermission(id, "always", null);
+            }
+            permSlot.setVisibility(View.VISIBLE);
+            permSlot.removeAllViews();
+            TextView pill = text(12, R.color.ok, true);
+            pill.setText("⏵ unattended — auto-allowing " + action
+                    + " · tap to turn off");
+            pill.setBackground(Theme.sysPill(this));
+            int pp = dp(12);
+            pill.setPadding(pp, dp(7), pp, dp(7));
+            pill.setOnClickListener(v -> setAutoAllow(false));
+            permSlot.addView(pill);
+            return;
+        }
+        permSlot.setVisibility(View.VISIBLE);
+        permSlot.removeAllViews();
+        permSlot.addView(buildPermCard(perm));
+    }
+
+    private View buildPermCard(Map<String, Object> perm) {
+        final String id = Json.str(perm, "id");
+        String action = nz(Json.str(perm, "permission"),
+                nz(Json.str(perm, "type"), "tool"));
+        StringBuilder detail = new StringBuilder();
+        Map<String, Object> md = Json.map(perm, "metadata");
+        if (md != null) {
+            for (String k : new String[]{"title", "description", "path", "command"}) {
+                String v = Json.str(md, k);
+                if (v != null && !v.isEmpty()) detail.append(v).append('\n');
+            }
+            Object inp = md.get("input");
+            if (inp != null && !"null".equals(String.valueOf(inp))
+                    && String.valueOf(inp).trim().length() > 0) {
+                detail.append(inp);
+            }
+        }
+        List<Object> pats = Json.list(perm, "patterns");
+        if (pats != null && !pats.isEmpty()) detail.append("patterns: ").append(pats);
+        if (detail.length() == 0) detail.append("(no details provided)");
+
+        // P10: agent-approval sheet — accent card, big buttons, impossible
+        // to miss and impossible to mis-tap.
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setBackground(Theme.permCard(this));
+        int cp = dp(14);
+        c.setPadding(cp, cp, cp, cp);
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        TextView badge = text(13, R.color.warn, false);
+        badge.setText("⚠");
+        badge.setPadding(0, 0, dp(8), 0);
+        head.addView(badge);
+        TextView t = text(14, R.color.text_primary, true);
+        t.setText("Allow " + action + "?");
+        head.addView(t, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        c.addView(head);
+
+        TextView d = mono(text(12, R.color.text_secondary, false), 12);
+        String dt = detail.toString();
+        if (dt.length() > 1500) dt = dt.substring(0, 1500) + "…";
+        d.setText(dt);
+        d.setBackground(Theme.codeWell(this));
+        int dpc = dp(10);
+        d.setPadding(dpc, dpc, dpc, dpc);
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        dlp.topMargin = dp(10);
+        c.addView(d, dlp);
+
+        LinearLayout btns = new LinearLayout(this);
+        btns.setOrientation(LinearLayout.HORIZONTAL);
+        btns.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        blp.topMargin = dp(12);
+
+        TextView deny = permButton("Deny", "reject", Theme.denyPill(this), id, R.color.err);
+        btns.addView(deny);
+        TextView always = permButton("Always allow", "always", Theme.outlinePill(this), id, R.color.accent_light);
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        alp.leftMargin = dp(8);
+        btns.addView(always, alp);
+        TextView allow = permButton("Allow", "once", Theme.allowPill(this), id, R.color.on_accent);
+        LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        vlp.leftMargin = dp(8);
+        btns.addView(allow, vlp);
+        c.addView(btns);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(8);
+        c.setLayoutParams(lp);
+        return c;
+    }
+
+    /** P10: one solid, tappable permission button (min touch target 44dp). */
+    private TextView permButton(String label, String response,
+                                android.graphics.drawable.Drawable bg, String id, int colorRes) {
+        TextView b = text(13, colorRes, true);
+        b.setText(label);
+        b.setBackground(bg);
+        b.setGravity(Gravity.CENTER);
+        int p = dp(16);
+        b.setPadding(p, dp(11), p, dp(11));
+        b.setOnClickListener(v -> {
+            Theme.haptic(v);
+            Theme.pop(b);
+            if (id != null) answerPermission(id, response);
+            else {
+                Toast.makeText(this, "missing request id — reopening…",
+                        Toast.LENGTH_SHORT).show();
+                checkPermissionQueue();
+            }
+        });
+        return b;
+    }
+
+    private void answerPermission(String id, String response) {
+        // P25: one reply ladder, in RunHub. The view adds the human bits:
+        // the toast and the immediate card refresh.
+        RunHub.answerPermission(id, response, (ok, errS) -> {
+            if (ok) {
+                Toast.makeText(this,
+                        "always".equals(response) ? "always allowed"
+                                : "reject".equals(response) ? "denied" : "allowed",
+                        Toast.LENGTH_SHORT).show();
+            } else {
+                sys("permission reply failed · " + errS);
+                Toast.makeText(this, "reply failed — try again", Toast.LENGTH_SHORT).show();
+            }
+            checkPermissionQueue();
+        });
+    }
+
+    // ------------------------------------------------ P50: questions
+    // The question tool (and the plan approval) used to render as an
+    // ordinary tool card stuck on "running…" forever — the server blocked
+    // the run waiting for an answer the app could never give. The pinned
+    // card below is the unblock path: tappable options, one Answer /
+    // Skip action, reply through POST /api/session/{sid}/question/{rid}/reply.
+
+    private void checkQuestionQueue() {
+        if (qSlot == null) return;
+        String sid = RunHub.sessionId();
+        Map<String, Object> req = RunHub.pendingQuestion(sid);
+        Questions.Req parsed = req == null ? null : Questions.parse(req);
+        if (parsed == null) {
+            qSlot.setVisibility(View.GONE);
+            qSlot.removeAllViews();
+            return;
+        }
+        qSlot.setVisibility(View.VISIBLE);
+        qSlot.removeAllViews();
+        qSlot.addView(buildQuestionCard(parsed));
+    }
+
+    /** One card per pending REQUEST: a section per question (header,
+     *  prompt, option chips), Answer + Skip at the bottom. Single-choice
+     *  prompts behave like radios; multi-choice prompts toggle; the
+     *  Answer button submits one label array per question in order
+     *  (unanswered ships as [] — the server renders "Unanswered"). */
+    private View buildQuestionCard(final Questions.Req req) {
+        final int n = req.prompts.size();
+        final List<List<String>> picked = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) picked.add(new ArrayList<>());
+
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setBackground(Theme.permCard(this));
+        int cp = dp(14);
+        c.setPadding(cp, cp, cp, cp);
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        TextView badge = text(13, R.color.accent_light, false);
+        badge.setText("❓");
+        badge.setPadding(0, 0, dp(8), 0);
+        head.addView(badge);
+        TextView t = text(14, R.color.text_primary, true);
+        t.setText(n == 1 ? "The agent needs your answer"
+                : "The agent needs " + n + " answers");
+        head.addView(t, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        c.addView(head);
+
+        for (int qi = 0; qi < n; qi++) {
+            final int qiF = qi;                 // lambda capture
+            final Questions.Prompt p = req.prompts.get(qi);
+            if (qi > 0) {
+                View gap = new View(this);
+                c.addView(gap, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(10)));
+            }
+            if (p.header != null && !p.header.isEmpty()) {
+                TextView h = text(11, R.color.accent_light, true);
+                h.setText(p.header.toUpperCase(Locale.ROOT));
+                c.addView(h, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
+            TextView q = text(13, R.color.text_primary, false);
+            q.setText(p.question);
+            q.setPadding(0, dp(2), 0, dp(6));
+            c.addView(q, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            if (p.options.isEmpty()) {
+                // no options given — a free-form ask; the user answers by
+                // typing (the agent reads the plain "Unanswered" echo and
+                // rephrases). Keep the card honest instead of empty.
+                TextView f = text(12, R.color.text_secondary, false);
+                f.setText("(no options — type your answer in the composer "
+                        + "and tap Skip)");
+                c.addView(f, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+                continue;
+            }
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+            boolean first = true;
+            for (final Questions.Opt o : p.options) {
+                if (!first) {
+                    View sp = new View(this);
+                    LinearLayout.LayoutParams spl = new LinearLayout.LayoutParams(dp(6), 1);
+                    row.addView(sp, spl);
+                }
+                first = false;
+                TextView chip = text(12, R.color.text_primary, false);
+                chip.setText(o.label);
+                chip.setBackground(Theme.outlinePill(this));
+                chip.setPadding(dp(12), dp(8), dp(12), dp(8));
+                chip.setOnClickListener(v -> {
+                    Theme.haptic(v);
+                    List<String> cur = picked.get(qiF);
+                    if (p.multiple) {
+                        if (cur.contains(o.label)) {
+                            cur.remove(o.label);
+                            chip.setBackground(Theme.outlinePill(this));
+                            chip.setTextColor(Theme.cr(this, R.color.text_primary));
+                        } else {
+                            cur.add(o.label);
+                            chip.setBackground(Theme.allowPill(this));
+                            chip.setTextColor(Theme.cr(this, R.color.on_accent));
+                        }
+                    } else {
+                        cur.clear();
+                        cur.add(o.label);
+                        // radio pass over this prompt's chips
+                        for (int k = 0; k < row.getChildCount(); k++) {
+                            View cv = row.getChildAt(k);
+                            if (cv instanceof TextView) {
+                                ((TextView) cv).setBackground(Theme.outlinePill(this));
+                                ((TextView) cv).setTextColor(
+                                        Theme.cr(this, R.color.text_primary));
+                            }
+                        }
+                        chip.setBackground(Theme.allowPill(this));
+                        chip.setTextColor(Theme.cr(this, R.color.on_accent));
+                    }
+                });
+                row.addView(chip, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
+            LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            c.addView(row, rlp);
+            if (p.multiple) {
+                TextView hint = text(10, R.color.text_secondary, false);
+                hint.setText("multiple choices — toggle all that apply");
+                hint.setPadding(0, dp(3), 0, 0);
+                c.addView(hint);
+            }
+        }
+
+        LinearLayout btns = new LinearLayout(this);
+        btns.setOrientation(LinearLayout.HORIZONTAL);
+        btns.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        blp.topMargin = dp(12);
+
+        TextView skip = text(13, R.color.err, true);
+        skip.setText("Skip");
+        skip.setBackground(Theme.denyPill(this));
+        skip.setGravity(Gravity.CENTER);
+        int sp2 = dp(16);
+        skip.setPadding(sp2, dp(11), sp2, dp(11));
+        skip.setOnClickListener(v -> {
+            Theme.haptic(v);
+            Theme.pop(v);
+            RunHub.rejectQuestion(RunHub.sessionId(), req.id, (ok, errS) -> {
+                if (ok) Toast.makeText(this, "skipped — the agent moves on",
+                        Toast.LENGTH_SHORT).show();
+                else {
+                    sys("question skip failed · " + errS);
+                    Toast.makeText(this, "skip failed — try again",
+                            Toast.LENGTH_SHORT).show();
+                }
+                checkQuestionQueue();
+            });
+        });
+        btns.addView(skip);
+
+        TextView ans = text(13, R.color.on_accent, true);
+        ans.setText("Answer");
+        ans.setBackground(Theme.allowPill(this));
+        ans.setGravity(Gravity.CENTER);
+        int ap = dp(16);
+        ans.setPadding(ap, dp(11), ap, dp(11));
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        alp.leftMargin = dp(8);
+        ans.setOnClickListener(v -> {
+            Theme.haptic(v);
+            Theme.pop(v);
+            RunHub.answerQuestion(RunHub.sessionId(), req.id, picked, (ok, errS) -> {
+                if (ok) {
+                    StringBuilder echo = new StringBuilder();
+                    for (int i = 0; i < req.prompts.size() && i < picked.size(); i++) {
+                        if (echo.length() > 0) echo.append(" · ");
+                        echo.append(Questions.echo(picked.get(i)));
+                    }
+                    Toast.makeText(this, "answered: " + echo,
+                            Toast.LENGTH_SHORT).show();
+                } else {
+                    sys("question reply failed · " + errS);
+                    Toast.makeText(this, "reply failed — try again",
+                            Toast.LENGTH_SHORT).show();
+                }
+                checkQuestionQueue();
+            });
+        });
+        btns.addView(ans, alp);
+        c.addView(btns);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(8);
+        c.setLayoutParams(lp);
+        return c;
+    }
+
+    // ----------------------------------------------------------- palette
+
+    // ---- P29→P30: the terse token-saver (i-have-adhd / caveman pattern) ----
+    // The community presets cut 40-65% of output tokens with one move:
+    // the agent ACTS more and TALKS less.
+    //
+    // P30 REDESIGN (field report): P29 wrote a managed block into the
+    // project's AGENTS.md — but opencode reads that file ONCE per session,
+    // so a mid-conversation flip did nothing until the next session (the
+    // feature "looked broken"), and the block lived inside the project
+    // folder, leaking the style into git diffs and other sessions. Now:
+    //   • the toggle is a plain app preference — no file writes, nothing
+    //     to commit, nothing project-wide, ever;
+    //   • the preference reaches the model as a <system-reminder> note
+    //     prepended to the user's NEXT message in THIS session
+    //     (RunHub.send → TerseMode.wrap) — live, one turn, no extra cost;
+    //   • this screen is honest about the timing: "applies from your
+    //     next message".
+
+    /** The terse preference — app-wide, instant to read, no I/O on the
+     *  project folder. */
+    private boolean terseOn() {
+        return getSharedPreferences("oc", MODE_PRIVATE)
+                .getBoolean("terse", false);
+    }
+
+    /** Flip the preference. The model is told with the NEXT message in
+     *  this chat (a <system-reminder> rides it — see TerseMode.wrap);
+     *  the UI says exactly that instead of implying an instant rewrite.
+     *  A run already streaming keeps its current style — the note lands
+     *  on the message after. No file is touched. */
+    private void toggleTerse() {
+        final boolean on = !terseOn();
+        getSharedPreferences("oc", MODE_PRIVATE).edit()
+                .putBoolean("terse", on).apply();
+        Theme.pop(chipMode);
+        sys(on
+            ? "◈ terse replies ON — the agent is told with your NEXT message "
+              + "in this chat: act first, skip the essay (community presets "
+              + "cut output tokens 40-65%). AGENTS.md is never touched."
+            : "terse replies OFF — your next message in this chat tells the "
+              + "agent the normal style is back. AGENTS.md is never touched.");
+        Toast.makeText(this, on
+                ? "Terse replies on — applies from your next message"
+                : "Terse replies off — applies from your next message",
+                Toast.LENGTH_SHORT).show();
+    }
+
+    private void palette() {
+        final String[] cmds = {
+                "New chat", "Sessions…", "Model…", "Toggle Build / Plan",
+                "Compact context (save tokens)",
+                "✦ Interactive canvas…",
+                "Find in chat…",
+                terseOn() ? "Turn OFF terse replies (next message)"
+                          : "Turn ON terse replies (token saver)",
+                autoAllowOn() ? "Turn OFF unattended (auto-allow)"
+                              : "Turn ON unattended (auto-allow)",
+                "Project files →", "Sandbox environment",
+                "Projects →", "Settings",
+                "API keys…", "Server logs & shell…", "Restart server",
+                "Expand all cards", "Collapse all cards",
+                "Copy last response", "Export chat to Downloads",
+                "Share chat as Markdown"};
+        // P34: the ⌘ sheet is a Sheet — and the Interactive canvas is
+        // PINNED as a featured accent row at the top (the field: "some
+        // feutures like that interactive html thingy isnt as seable by
+        // the user they have to scroll below"). While the filter is
+        // empty the row leads; typing hides it so the filter results
+        // stand alone. The command stays in the list too — two doors,
+        // one destination.
+        final Sheet sh = Sheet.show(this, "⌘ commands");
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        int p = dp(16);
+        wrap.setPadding(p, dp(4), p, dp(8));
+        TextView featured = new TextView(this);
+        featured.setText("✦  Interactive canvas");
+        featured.setTextSize(14);
+        featured.setTypeface(Typeface.DEFAULT_BOLD);
+        featured.setTextColor(Theme.ACCENT_LT);
+        featured.setGravity(Gravity.CENTER_VERTICAL);
+        featured.setBackground(Theme.suggestPill(this));
+        int fp = dp(14);
+        featured.setPadding(fp, dp(11), fp, dp(11));
+        Theme.press(featured);
+        featured.setOnClickListener(v -> {
+            sh.dismiss();
+            canvasDialog();
+        });
+        wrap.addView(featured, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        final EditText filter = Sheet.input(this, "filter…", null, true);
+        filter.setTextSize(14);
+        LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        flp.topMargin = dp(10);
+        wrap.addView(filter, flp);
+        final ListView lv = new ListView(this);
+        final List<String> visible = new ArrayList<>();
+        // P34: rows paint from the LIVE tokens (Theme.cr) — the platform
+        // simple_list_item_1 resolved textColorPrimary from the activity
+        // theme (build-time-frozen OLED white), so on the Paper palette
+        // the command rows were white-on-paper. The model/sessions sheets
+        // already painted through text() → Theme.cr; the commands list
+        // now speaks the same palette-correct language.
+        final android.widget.BaseAdapter ad = new android.widget.BaseAdapter() {
+            public int getCount() { return visible.size(); }
+            public Object getItem(int i) { return visible.get(i); }
+            public long getItemId(int i) { return i; }
+            public View getView(int i, View cv, ViewGroup parent) {
+                TextView tv = (cv instanceof TextView)
+                        ? (TextView) cv : new TextView(ChatActivity.this);
+                tv.setText(visible.get(i));
+                tv.setTextSize(14);
+                tv.setTextColor(Theme.cr(ChatActivity.this, R.color.text_primary));
+                int pad = dp(14);
+                tv.setPadding(pad, dp(10), pad, dp(10));
+                return tv;
+            }
+        };
+        lv.setAdapter(ad);
+        wrap.addView(lv, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(380)));
+        sh.add(wrap);
+        Runnable refill = () -> {
+            String q = filter.getText().toString().toLowerCase(Locale.US);
+            featured.setVisibility(q.isEmpty() ? View.VISIBLE : View.GONE);
+            visible.clear();
+            for (String c : cmds) if (c.toLowerCase(Locale.US).contains(q)) visible.add(c);
+            ad.notifyDataSetChanged();
+        };
+        filter.addTextChangedListener(new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int c2, int d) {}
+            public void onTextChanged(CharSequence s, int a, int c2, int d) {}
+            public void afterTextChanged(Editable s) { refill.run(); }
+        });
+        refill.run();
+        lv.setOnItemClickListener((parent, v, pos, id2) -> {
+            sh.dismiss();
+            runCommand(visible.get(pos));
+        });
+        sh.focus(filter);
+    }
+
+    private void runCommand(String cmd) {
+        switch (cmd) {
+            case "New chat": RunHub.loadSession(null); break;
+            case "Sessions…": sessionsSheet(); break;
+            case "Model…": modelSheet(); break;
+            case "Project files →":
+                startActivity(new Intent(this, FilesActivity.class)); break;
+            case "Sandbox environment":
+                ex.execute(() -> {
+                    Throwable t = Resilience.guard(() -> {
+                        final String rep = Debian.envReport(this);
+                        ui.post(() -> sys(rep));
+                    });
+                    if (t != null) Trail.record(this, "env report", t);
+                });
+                break;
+            case "Toggle Build / Plan": toggleMode(); break;
+            case "Compact context (save tokens)":
+                RunHub.compact(); break;
+            case "✦ Interactive canvas…": canvasDialog(); break;
+            case "Find in chat…": findInChat(); break;
+            case "Turn ON terse replies (token saver)":
+            case "Turn OFF terse replies (token saver)":
+                toggleTerse(); break;
+            case "Turn ON unattended (auto-allow)":
+            case "Turn OFF unattended (auto-allow)":
+                setAutoAllow(!autoAllowOn()); break;
+            case "Projects →":
+                startActivity(new Intent(this, HomeActivity.class)); break;
+            case "Settings":
+                startActivity(new Intent(this, SettingsActivity.class)); break;
+            case "API keys…":
+                startActivity(new Intent(this, KeysActivity.class)); break;
+            case "Server logs & shell…":
+                startActivity(new Intent(this, DiagnosticsActivity.class)); break;
+            case "Restart server":
+                ServerService.restart(this);
+                Toast.makeText(this, "restarting server…", Toast.LENGTH_SHORT).show();
+                break;
+            case "Expand all cards": setAllOpen(true); break;
+            case "Collapse all cards": setAllOpen(false); break;
+            case "Copy last response": copyLast(); break;
+            case "Export chat to Downloads": exportChat(); break;
+            case "Share chat as Markdown": shareChat(); break;
+            default: break;
+        }
+    }
+
+    // ============================================== P31: interactive canvas
+
+    /** The canvas ask: the ONLY way a page gets written — the user asks
+     *  for it, the app carries the request as a normal message that tells
+     *  the model exactly what a self-contained page must look like. The
+     *  tool is OFFERED, never forced: nothing runs unless the user opens
+     *  the ▶ chip, the ⌘ featured row, or this command. P34: presented on
+     *  the Sheet system (the grey platform box from the field screenshot
+     *  is gone); validation failure keeps the sheet open, exactly like
+     *  the old dialog did. */
+    private void canvasDialog() {
+        canvasDialog(null);
+    }
+
+    /** P34: the Settings hand-off — Essentials → Interactive canvas
+     *  opens THIS chat pre-typed (extra "askCanvas"), so the feature is
+     *  one tap from the top of Settings, not a scavenger hunt. */
+    private void canvasDialog(String preset) {
+        // a preset (the Settings hand-off) wins only when it says something;
+        // otherwise the ask starts from whatever the composer already holds
+        String initial = (preset != null && !preset.trim().isEmpty())
+                ? preset : input.getText().toString().trim();
+        final EditText in = Sheet.input(this,
+                "what should the interactive page explain?", initial, false);
+        in.setTextSize(14);
+        final Sheet sh = Sheet.show(this, "✦ Interactive canvas")
+                .msg("The agent writes a self-contained HTML page (inline "
+                        + "CSS/JS, no external resources) to " + CanvasDoc.FILE_NAME
+                        + " in the project, then render-checks it through the "
+                        + "app's local checker and fixes every console error — "
+                        + "what you open has already passed its check. When the "
+                        + "tool card shows, tap \u25B6 interactive to open it.")
+                .add(in);
+        if (!sh.showing()) return;
+        sh.pillKeep("Explain it", Sheet.PRIMARY, (s) -> {
+            String topic = in.getText().toString().trim();
+            if (topic.isEmpty()) {
+                Toast.makeText(this, "give it a topic first",
+                        Toast.LENGTH_SHORT).show();
+                return;                       // the sheet stays, like the old dialog
+            }
+            s.dismiss();
+            input.setText("");
+            RunHub.sys(CanvasDoc.sentNote());
+            RunHub.send(CanvasDoc.prompt(topic)
+                    + RenderCheck.renderClause(RenderServer.port(),
+                                               RenderServer.token()));
+        });
+        sh.pill("Cancel", Sheet.QUIET, null);
+        sh.focus(in);
+    }
+
+    /** Open a written page in the sandboxed viewer. */
+    private void openCanvas(String path) {
+        try {
+            Intent i = new Intent(this, CanvasActivity.class);
+            i.putExtra("path", path);
+            startActivity(i);
+            overridePendingTransition(R.anim.slide_up_in, R.anim.fade_out);
+        } catch (Exception e) {
+            Toast.makeText(this, "cannot open the page: " + e,
+                    Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    // ============================================== P31: find + share
+
+    private List<Integer> findHits;
+    private int findPos = -1;
+
+    /** Find in chat: scans the transcript, jumps match to match. The
+     *  model stays untouched — this is a pure view-side search. P34:
+     *  on the Sheet; the sheet stays open across jumps (as the old
+     *  dialog did) so a tap on Find next keeps the query. */
+    private void findInChat() {
+        final EditText in = Sheet.input(this, "search this conversation…", null, true);
+        in.setTextSize(14);
+        final Sheet sh = Sheet.show(this, "Find in chat").add(in);
+        if (!sh.showing()) return;
+        sh.pillKeep("Find first", Sheet.PRIMARY, (s) -> {
+            findHits = scanChat(in.getText().toString());
+            findPos = -1;
+            findJumpNext();
+        });
+        sh.pillKeep("Find next", Sheet.QUIET, (s) -> findJumpNext());
+        sh.pill("Cancel", Sheet.QUIET, null);
+        sh.focus(in);
+    }
+
+    /** Row indexes matching the query (case-insensitive, all row kinds). */
+    private List<Integer> scanChat(String query) {
+        List<Integer> out = new ArrayList<>();
+        if (query == null || query.trim().isEmpty()) return out;
+        String q = query.toLowerCase(Locale.US);
+        List<RunHub.Row> rs = RunHub.rows();
+        synchronized (lock) {
+            for (int i = 0; i < rs.size(); i++) {
+                RunHub.Row r = rs.get(i);
+                StringBuilder sb = new StringBuilder();
+                if (r.text != null) sb.append(r.text).append(' ');
+                if (r.title != null) sb.append(r.title).append(' ');
+                if (r.input != null) sb.append(r.input).append(' ');
+                if (r.output != null) sb.append(r.output).append(' ');
+                if (r.meta != null) sb.append(r.meta).append(' ');
+                if (sb.indexOf(q) >= 0) out.add(i);
+            }
+        }
+        return out;
+    }
+
+    private void findJumpNext() {
+        if (findHits == null || findHits.isEmpty()) {
+            Toast.makeText(this, "no matches in this chat", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        findPos = (findPos + 1) % findHits.size();
+        int idx = findHits.get(findPos);
+        List<RunHub.Row> rs = RunHub.rows();
+        if (idx >= rs.size()) return;
+        RunHub.Row r = rs.get(idx);
+        View v0 = r.key == null ? null : viewByKey.get(r.key);
+        if (v0 == null) { renderAll(); v0 = r.key == null ? null : viewByKey.get(r.key); }
+        if (v0 != null) {
+            final View v = v0;
+            scroll.post(() -> scroll.smoothScrollTo(0, Math.max(0, v.getTop() - dp(60))));
+            if (Theme.motionOn(this)) Theme.pop(v);
+        }
+        Toast.makeText(this, "match " + (findPos + 1) + " of " + findHits.size(),
+                Toast.LENGTH_SHORT).show();
+    }
+
+    /** P31: share the chat as Markdown through the system share sheet
+     *  (EXTRA_TEXT — no file URIs, no storage permission, no crash). */
+    private void shareChat() {
+        String md;
+        synchronized (lock) {
+            md = chatMarkdown();
+        }
+        if (md.trim().isEmpty()) {
+            Toast.makeText(this, "nothing to share yet", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Intent s = new Intent(Intent.ACTION_SEND);
+        s.setType("text/plain");
+        s.putExtra(Intent.EXTRA_SUBJECT,
+                "OpenCode chat · " + (projectName == null ? "project" : projectName));
+        s.putExtra(Intent.EXTRA_TEXT, md);
+        try {
+            startActivity(Intent.createChooser(s, "Share chat"));
+        } catch (Exception e) {
+            Toast.makeText(this, "no app could share this", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** The transcript as Markdown (share + future exports). Pure over the
+     *  row list; called under the hub lock. */
+    private String chatMarkdown() {
+        StringBuilder b = new StringBuilder();
+        b.append("# OpenCode chat");
+        if (projectName != null && !projectName.isEmpty())
+            b.append(" — ").append(projectName);
+        b.append('\n');
+        List<RunHub.Row> rs = RunHub.rows();
+        for (RunHub.Row r : rs) {
+            switch (r.kind) {
+                case K_USER:
+                    b.append("\n## you\n\n").append(r.text).append('\n');
+                    break;
+                case K_ASSISTANT:
+                    b.append("\n## agent\n\n").append(r.text).append('\n');
+                    break;
+                case K_REASON:
+                    if (r.text.length() > 0)
+                        b.append("\n> thinking: ")
+                         .append(r.text.toString().replace("\n", "\n> "))
+                         .append('\n');
+                    break;
+                case K_TOOL:
+                    b.append("\n> tool ").append(r.tool)
+                     .append(r.title == null || r.title.isEmpty() ? "" : " · " + r.title)
+                     .append('\n');
+                    if (r.input.length() > 0)
+                        b.append("\n```\n").append(r.input).append("\n```\n");
+                    if (r.output.length() > 0)
+                        b.append("\n```").append(r.output).append("\n```\n");
+                    break;
+                case K_ERR:
+                    b.append("\n> ! error: ").append(r.text).append('\n');
+                    break;
+                default: break;   // live/sys/image rows stay out of the export
+            }
+        }
+        return b.toString();
+    }
+
+    // ---------------------------------------------------------- sessions
+
+    private static final class SessRow {
+        String id, title; double updated;
+    }
+
+    private void sessionsSheet() {
+        ex.execute(() -> {
+            final List<SessRow> listS = new ArrayList<>();
+            try {
+                Api.Resp r = Api.get("/session");
+                if (r.ok()) {
+                    List<Object> arr = Json.arr(Json.parse(r.body));
+                    if (arr != null) for (Object o : arr) {
+                        Map<String, Object> m = Json.obj(o);
+                        if (m == null) continue;
+                        SessRow s = new SessRow();
+                        s.id = Json.str(m, "id");
+                        s.title = nz(Json.str(m, "title"), "untitled");
+                        Map<String, Object> time = Json.map(m, "time");
+                        s.updated = time != null ? num(time.get("updated")) : 0;
+                        if (s.id != null) listS.add(s);
+                    }
+                }
+            } catch (Exception ignored) {}
+            listS.sort((a, b) -> Double.compare(b.updated, a.updated));
+            ui.post(() -> guarded("sessions sheet", () -> showSessions(listS)));
+        });
+    }
+
+    private void showSessions(List<SessRow> listS) {
+        if (isFinishing() || isDestroyed()) return;
+        final Sheet sh = Sheet.show(this, "Sessions");
+        if (!sh.showing()) return;
+        ListView lv = new ListView(this);
+        List<Object[]> items = new ArrayList<>(); // [titleLine, timeLine, SessRow|null]
+        items.add(new Object[]{"＋  New chat", "start over — the old chats stay here", null});
+        for (SessRow s : listS) {
+            boolean run = RunHub.busyFor(s.id);
+            items.add(new Object[]{
+                    (run ? "● " : "") + s.title,
+                    run ? "RUNNING NOW · " + Resilience.ago((long) s.updated, System.currentTimeMillis())
+                            : Resilience.ago((long) s.updated, System.currentTimeMillis()),
+                    s});
+        }
+        lv.setAdapter(new BaseAdapter() {
+            public int getCount() { return items.size(); }
+            public Object getItem(int i) { return items.get(i); }
+            public long getItemId(int i) { return i; }
+            public View getView(int i, View cv, ViewGroup parent) {
+                LinearLayout box = new LinearLayout(ChatActivity.this);
+                box.setOrientation(LinearLayout.VERTICAL);
+                int pad = dp(14);
+                box.setPadding(pad, dp(9), pad, dp(9));
+                Object[] it = items.get(i);
+                boolean run = String.valueOf(it[1]).startsWith("RUNNING");
+                TextView t1 = text(14, i == 0 ? R.color.accent_light
+                        : run ? R.color.ok : R.color.text_primary, i == 0 || run);
+                t1.setText(String.valueOf(it[0]));
+                t1.setSingleLine(true);
+                t1.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+                TextView t2 = text(11, run ? R.color.ok : R.color.text_secondary, run);
+                t2.setText(String.valueOf(it[1]));
+                box.addView(t1);
+                box.addView(t2);
+                return box;
+            }
+        });
+        // P42-check: ratio-capped — a fixed 420dp list pushed the title
+        // and the newest rows off-screen on short (landscape) windows.
+        sh.addFixed(lv, Math.min(420, (int) (getResources().getDisplayMetrics()
+                .heightPixels / getResources().getDisplayMetrics().density * 0.60f)));
+        lv.setOnItemClickListener((parent, v, pos, id3) -> {
+            sh.dismiss();
+            Object[] it = items.get(pos);
+            if (it[2] == null) RunHub.loadSession(null);
+            else RunHub.loadSession(((SessRow) it[2]).id);
+        });
+        lv.setOnItemLongClickListener((parent, v, pos, id4) -> {
+            Object[] it = items.get(pos);
+            if (!(it[2] instanceof SessRow)) return true;
+            SessRow s = (SessRow) it[2];
+            // P31: a running session can be stopped right from the sheet —
+            // the only other stop is the ■ button in its own chat.
+            boolean running = RunHub.busyFor(s.id);
+            sessionActions(sh, s, running);
+            return true;
+        });
+    }
+
+    /** P34: one session's actions — the app's own rows (Open / Stop the
+     *  run when it's running / Delete in the danger wash), the deck's
+     *  long-press sheet language, no framework list box. */
+    private void sessionActions(Sheet parent, SessRow s, boolean running) {
+        Sheet acts = Sheet.show(this, s.title);
+        if (!acts.showing()) return;
+        acts.row("▸", "Open", "load this conversation", Theme.ACCENT_LT, () -> {
+            acts.dismiss();
+            parent.dismiss();
+            RunHub.loadSession(s.id);
+        });
+        if (running) {
+            acts.row("■", "Stop the run", "the transcript stays", Theme.WARN, () -> {
+                acts.dismiss();
+                parent.dismiss();
+                RunHub.abortSession(s.id);
+            });
+        }
+        acts.row("✕", "Delete", "removes this session's transcript",
+                Theme.ERR, () -> {
+                    acts.dismiss();
+                    parent.dismiss();
+                    confirmDelete(s);
+                });
+        acts.pill("Cancel", Sheet.QUIET, null);
+    }
+
+    private void confirmDelete(SessRow s) {
+        Sheet.show(this, "Delete session?")
+                .msg(s.title)
+                .pill("Delete", Sheet.DANGER, () -> ex.execute(() -> {
+                    try {
+                        Api.Resp r = Api.call("DELETE", "/session/" + s.id, null, 10_000);
+                        if (!r.ok()) sys("delete failed · HTTP " + r.status);
+                        else if (s.id.equals(RunHub.sessionId())) RunHub.loadSession(null);
+                    } catch (Exception e) {
+                        sys("delete failed: " + e);
+                    }
+                }))
+                .pill("Cancel", Sheet.QUIET, null);
+    }
+
+    // ------------------------------------------------------------ models
+
+    // P16: the sheet keeps LIVE references so a key added from inside it
+    // (＋ key chip → KeysActivity → back) refreshes the rows in place —
+    // no more close/reopen to see "OpenCode Go · ready".
+    private Sheet modelDlg;
+    private List<Models.Prov> sheetProvs;
+    private Runnable sheetRefill;
+    private TextView sheetHint;
+    private boolean keysFromSheet;
+
+    private void modelSheet() {
+        // P29 IDIOT-PROOFING — the field report: "if someone saw nothing
+        // happened this would cause them to click again, causing the model
+        // switch pop up to open twice." Three guards, in order:
+        //   1. IN-FLIGHT GUARD — a second tap while the catalog loads never
+        //      queues a second fetch/dialog; the chip visibly pops instead.
+        //   2. INSTANT OPEN — the last fetch is already in memory, so the
+        //      sheet opens NOW and a background refresh updates it in place
+        //      (the ↻ semantics the sheet already had). First-ever open
+        //      (nothing cached) falls to the loading chip + single fetch.
+        //   3. SINGLE DIALOG — showModels() refuses to build a second
+        //      dialog while one is showing; it refreshes the open one.
+        if (!modelsInFlight.compareAndSet(false, true)) {
+            Theme.pop(chipModel);            // "working on it" — visibly
+            return;
+        }
+        final List<Models.Prov> cached = Models.lastFetch();
+        final boolean openedFromCache = cached != null && !cached.isEmpty();
+        if (openedFromCache) {
+            showModels(cached);
+        } else {
+            chipLoading(true);
+        }
+        ex.execute(() -> {
+            Throwable t = Resilience.guard(() -> {
+                List<Models.Prov> fresh = Models.fetch(this);
+                ui.post(() -> {
+                    chipLoading(false);
+                    if (isFinishing() || isDestroyed()) return;
+                    if (openedFromCache) updateOpenModels(fresh);
+                    else showModels(fresh);
+                });
+            });
+            if (t != null) Trail.record(this, "model sheet", t);
+            modelsInFlight.set(false);
+        });
+    }
+
+    /** P29: the chip's "the catalog is loading" state — the feedback the
+     *  missing half of the double-open bug. A gentle alpha pulse; the
+     *  normal text returns via refreshChips() when it ends. */
+    private void chipLoading(boolean on) {
+        if (chipModel == null) return;
+        if (on) {
+            chipModel.setText("loading models…");
+            if (chipPulse != null) { chipPulse.cancel(); chipPulse = null; }
+            if (Theme.motionOn(this)) {
+                chipPulse = ObjectAnimator.ofFloat(chipModel, "alpha", 1f, 0.45f);
+                chipPulse.setDuration(520);
+                chipPulse.setRepeatCount(ObjectAnimator.INFINITE);
+                chipPulse.setRepeatMode(ObjectAnimator.REVERSE);
+                chipPulse.start();
+            }
+        } else {
+            if (chipPulse != null) { chipPulse.cancel(); chipPulse = null; }
+            chipModel.setAlpha(1f);
+            refreshChips();
+        }
+    }
+
+    /** P29: refresh the ALREADY-OPEN sheet in place instead of stacking a
+     *  second dialog. If the user dismissed it meanwhile, do nothing. */
+    private void updateOpenModels(List<Models.Prov> fresh) {
+        if (modelDlg == null || !modelDlg.showing() || isFinishing()) return;
+        sheetProvs = fresh;
+        if (sheetRefill != null) sheetRefill.run();
+    }
+
+    /**
+     * P15 — the model sheet, rebuilt TWICE over:
+     *
+     * BEHAVIOR = the FIRST P12 again (the user: "the working model picker
+     * is in the first p12 that was uploaded to github"). P14's rework
+     * dropped Mdl.live, so every discovery-catalog row SAVED silently and
+     * the server then answered "Model not found" — the picker "looked
+     * broken" a third time. Restored from the P12a source, byte-for-byte
+     * in spirit:
+     *   • live models (the running server serves them NOW) first, bright
+     *   • discovery rows dim + "· catalog" tag
+     *   • tapping a discovery row REFUSES with a plain-language toast
+     *   • validateSelectedModel() self-heals stale picks again (live gate)
+     * plus P13/P14 keepers: source line, ⟨free⟩ badges, $/Mtok, 88% sheet,
+     * row recycling — and one NEW rule: a provider header tap never steals
+     * the whole sheet anymore (P14 dismissed to Keys; felt like a bug).
+     */
+    private void showModels(List<Models.Prov> provs) {
+        if (isFinishing() || isDestroyed()) return;
+        // P33: auth truth at OPEN time — the fetch that built these flags
+        // may be older than the user's last key save, and a sheet that
+        // calls a saved key "missing" (the "＋ key" chip, the no-key toast,
+        // the "no key yet" hint line) contradicts the keys screen and
+        // reads as an app bug. auth.json is one small file — read it
+        // fresh every open.
+        for (Models.Prov pr : provs) pr.configured = AuthStore.hasKey(this, pr.id);
+        // P29 guard 3: a sheet that is already showing is REFRESHED, never
+        // stacked — the double-open bug cannot survive its own race.
+        if (modelDlg != null && modelDlg.showing()) {
+            updateOpenModels(provs);
+            return;
+        }
+        // P34: the model catalog rides the Sheet system — same bottom panel
+        // as every other box, 82% tall for the catalog columns.
+        final Sheet sh = Sheet.show(this, "Model · all providers");
+        if (!sh.showing()) return;
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        int p = dp(16);
+        root.setPadding(p, dp(4), p, 0);
+
+        // P15 header: live counts + data source, then the search well.
+        LinearLayout srcRow = new LinearLayout(this);
+        srcRow.setOrientation(LinearLayout.HORIZONTAL);
+        srcRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView srcLine = text(11, R.color.text_secondary, false);
+        int liveN = 0, freeN = 0;
+        for (Models.Prov pr : provs)
+            for (Models.Mdl m : pr.models) {
+                if (m.live) liveN++;
+                if (m.free) freeN++;
+            }
+        srcLine.setText(liveN + " runnable now · " + countModels(provs)
+                + " in catalog · " + freeN + " free · " + Models.lastSource);
+        srcLine.setPadding(dp(4), 0, dp(4), dp(6));
+        srcRow.addView(srcLine, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        // P16: manual re-fetch — after saving a key elsewhere (or the server
+        // restart settling) this pulls fresh /config/providers into the OPEN
+        // sheet instead of forcing a close/reopen cycle.
+        TextView ref = text(13, R.color.accent_light, true);
+        ref.setText("↻");
+        int rp = dp(10);
+        ref.setPadding(rp, dp(2), rp, dp(5));
+        ref.setBackgroundResource(R.drawable.bg_chip);
+        Theme.press(ref);
+        ref.setOnClickListener(vv -> {
+            Toast.makeText(this, "refreshing providers…", Toast.LENGTH_SHORT).show();
+            ex.execute(() -> {
+                List<Models.Prov> fresh = Models.fetch(ChatActivity.this);
+                ui.post(() -> {
+                    sheetProvs = fresh;
+                    if (sheetRefill != null) sheetRefill.run();
+                });
+            });
+        });
+        srcRow.addView(ref, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(srcRow);
+
+        final EditText search = Sheet.input(this,
+                "search " + countModels(provs) + " models…", null, true);
+        search.setTextSize(14);
+        root.addView(search);
+
+        final ListView lv = new ListView(this);
+        root.addView(lv, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        TextView hint = text(11, R.color.text_secondary, false);
+        hint.setText("bright = runs now · dim = catalog — tap to try, auto-"
+                + "falls-back if refused · LONG-PRESS a model to pin it to "
+                + "★ Favorites · ⌘ → API keys to add one");
+        hint.setPadding(dp(4), dp(8), dp(4), dp(10));
+        root.addView(hint);
+        sheetHint = hint;
+        // P34: 82% tall inside the bottom sheet (the old window was 88%,
+        // but the sheet carries its own handle + title chrome). The DeX
+        // width cap is built into Sheet itself.
+        sh.tall(root, 0.82f);
+        modelDlg = sh;
+        sheetProvs = provs;
+        sh.onDismiss(() -> {
+            if (modelDlg == sh) {
+                modelDlg = null;
+                sheetRefill = null;
+                sheetProvs = null;
+                sheetHint = null;
+            }
+        });
+
+        final List<Object[]> items = new ArrayList<>(); // [kind, Prov, Mdl-or-tag]
+        Runnable refill = () -> {
+            String q = search.getText().toString().toLowerCase(Locale.US).trim();
+            items.clear();
+            String[] cur = Models.selected(this);
+            // P12a restored: within a provider, live models first.
+            java.util.Comparator<Models.Mdl> liveFirst = (a, b2) -> {
+                if (a.live != b2.live) return a.live ? -1 : 1;
+                return a.name.compareToIgnoreCase(b2.name);
+            };
+            List<Models.Prov> ps = sheetProvs != null ? sheetProvs : provs;
+            // P31: the ★ FAVORITES shelf — the user's pinned models, one
+            // tap away at the TOP of the sheet (long-press pins/unpins).
+            // Resolved against the live fetch; a favorite the rotating
+            // catalog no longer lists is HIDDEN (still pinned) not deleted.
+            if (q.isEmpty()) {
+                List<Object[]> shelf = new ArrayList<>();
+                for (String[] f : Models.favs(this)) {
+                    for (Models.Prov pr : ps) {
+                        if (!pr.id.equals(f[0])) continue;
+                        for (Models.Mdl m : pr.models)
+                            if (m.id.equals(f[1]))
+                                shelf.add(new Object[]{"f", pr, m});
+                    }
+                }
+                if (!shelf.isEmpty()) {
+                    items.add(new Object[]{"fh", null, null});
+                    items.addAll(shelf);
+                }
+            }
+            for (Models.Prov pr : ps) {
+                boolean provHit = q.isEmpty()
+                        || pr.id.toLowerCase(Locale.US).contains(q)
+                        || pr.name.toLowerCase(Locale.US).contains(q);
+                List<Models.Mdl> shown = new ArrayList<>();
+                for (Models.Mdl m : pr.models) {
+                    if (q.isEmpty() || provHit
+                            || m.id.toLowerCase(Locale.US).contains(q)
+                            || m.name.toLowerCase(Locale.US).contains(q)) shown.add(m);
+                }
+                if (shown.isEmpty() && !provHit) continue;
+                shown.sort(liveFirst);
+                items.add(new Object[]{"h", pr, null});
+                int cap = Math.min(shown.size(), 400);
+                for (int i = 0; i < cap; i++) items.add(new Object[]{"m", pr, shown.get(i)});
+                if (shown.size() > cap) items.add(new Object[]{"t", pr,
+                        "… " + (shown.size() - cap) + " more (refine search)"});
+            }
+            lv.setAdapter(new BaseAdapter() {
+                public int getCount() { return items.size(); }
+                public Object getItem(int i) { return items.get(i); }
+                public long getItemId(int i) { return i; }
+                public View getView(int i, View cv, ViewGroup parent) {
+                    Object[] it = items.get(i);
+                    LinearLayout box = (cv instanceof LinearLayout)
+                            ? (LinearLayout) cv : new LinearLayout(ChatActivity.this);
+                    box.setOrientation(LinearLayout.VERTICAL);
+                    box.removeAllViews();
+                    int pad = dp(14);
+                    box.setPadding(pad, dp(8), pad, dp(8));
+                    if ("fh".equals(it[0])) {
+                        // P31: the favorites shelf header.
+                        LinearLayout hrow = new LinearLayout(ChatActivity.this);
+                        hrow.setOrientation(LinearLayout.HORIZONTAL);
+                        hrow.setGravity(Gravity.CENTER_VERTICAL);
+                        TextView t = text(13, R.color.accent_light, true);
+                        t.setText("★  FAVORITES");
+                        t.setLetterSpacing(0.08f);
+                        hrow.addView(t, new LinearLayout.LayoutParams(0,
+                                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                        TextView tip = text(10, R.color.text_secondary, false);
+                        tip.setText("long-press a model to unpin");
+                        hrow.addView(tip);
+                        box.addView(hrow);
+                    } else if ("h".equals(it[0])) {
+                        // P16 provider header: state mark + a direct "＋ key"
+                        // action for providers missing theirs. The header tap
+                        // itself STILL never steals the sheet (P15 rule) — the
+                        // chip is the deliberate action. After Keys closes, the
+                        // rows refresh in place (see onResume).
+                        Models.Prov pr = (Models.Prov) it[1];
+                        LinearLayout hrow = new LinearLayout(ChatActivity.this);
+                        hrow.setOrientation(LinearLayout.HORIZONTAL);
+                        hrow.setGravity(Gravity.CENTER_VERTICAL);
+                        TextView t = text(13, pr.usable ? R.color.ok
+                                : pr.configured ? R.color.accent_light
+                                : R.color.text_secondary, true);
+                        String mark;
+                        if (pr.usable && "opencode".equals(pr.id))
+                            mark = "  ·  free · no key needed";   // P11 verified
+                        else if (pr.usable) mark = "  ·  ready";
+                        else if (pr.configured) mark = "  ·  key saved · the sandbox picks it up";
+                        else mark = "  ·  needs its own key";
+                        t.setText(pr.name + mark);
+                        t.setSingleLine(true);
+                        t.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                        hrow.addView(t, new LinearLayout.LayoutParams(0,
+                                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                        if (!pr.usable && !pr.configured) {
+                            TextView add = text(11, R.color.accent_light, true);
+                            add.setTypeface(Typeface.MONOSPACE);
+                            add.setText("＋ key");
+                            int ap = dp(9);
+                            add.setPadding(ap, dp(4), ap, dp(4));
+                            add.setBackgroundResource(R.drawable.bg_chip);
+                            Theme.press(add);
+                            add.setOnClickListener(vv -> {
+                                keysFromSheet = true;
+                                startActivity(new Intent(ChatActivity.this,
+                                        KeysActivity.class));
+                            });
+                            LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                                    ViewGroup.LayoutParams.WRAP_CONTENT);
+                            alp.leftMargin = dp(8);
+                            hrow.addView(add, alp);
+                        }
+                        box.addView(hrow);
+                    } else if ("m".equals(it[0]) || "f".equals(it[0])) {
+                        Models.Mdl m = (Models.Mdl) it[2];
+                        Models.Prov pr = (Models.Prov) it[1];
+                        boolean isCur = cur != null && cur[0].equals(pr.id)
+                                && cur[1].equals(m.id);
+                        boolean isFav = "f".equals(it[0]);
+                        // P12a rendering: live rows bright, catalog rows dim
+                        // and tagged — the state that told the user, at a
+                        // glance, exactly what would work.
+                        int col = isCur ? R.color.ok
+                                : m.live ? R.color.text_primary : R.color.text_secondary;
+                        // P27 clipping audit: the P26 row jammed provider +
+                        // price into ONE middle-ellipsized line — the price
+                        // collided with the path ellipsis (field shot). Two
+                        // fixed rows now: name+tags, then provider (left,
+                        // middle-ellipsis) vs price (right, never truncated
+                        // by the path).
+                        TextView t1 = text(14, col, isCur || m.live);
+                        t1.setText((isFav ? "★ " : "")
+                                + (isCur ? "✓ " : "") + m.name
+                                + (m.live ? "" : "   ·  catalog")
+                                + (m.free ? "   ⟨free⟩" : ""));
+                        t1.setSingleLine(true);
+                        t1.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                        box.addView(t1);
+                        LinearLayout meta = new LinearLayout(ChatActivity.this);
+                        meta.setOrientation(LinearLayout.HORIZONTAL);
+                        meta.setGravity(Gravity.CENTER_VERTICAL);
+                        TextView t2 = text(11, R.color.text_secondary, false);
+                        t2.setText(pr.id + "/" + m.id);
+                        t2.setSingleLine(true);
+                        t2.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+                        meta.addView(t2, new LinearLayout.LayoutParams(0,
+                                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                        if (!m.free && (m.costIn > 0 || m.costOut > 0)) {
+                            TextView cost = text(11, R.color.text_secondary, false);
+                            cost.setTypeface(Typeface.MONOSPACE);
+                            cost.setText(String.format(Locale.US,
+                                    "$%g in / $%g out/Mtok", m.costIn, m.costOut));
+                            cost.setSingleLine(true);
+                            cost.setPadding(dp(8), 0, 0, 0);
+                            meta.addView(cost, new LinearLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                                    ViewGroup.LayoutParams.WRAP_CONTENT));
+                        }
+                        box.addView(meta);
+                    } else {
+                        TextView t = text(12, R.color.text_secondary, false);
+                        t.setText(String.valueOf(it[2]));
+                        box.addView(t);
+                    }
+                    // P16: rows unfold once, on first bind — recycled rows stay
+                    // still (no replay jitter while scrolling).
+                    if (cv == null) Theme.enter(box, Math.min(i, 10) * 18L);
+                    return box;
+                }
+            });
+        };
+        search.addTextChangedListener(new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int c2, int d) {}
+            public void onTextChanged(CharSequence s, int a, int c2, int d) {}
+            public void afterTextChanged(Editable s) { refill.run(); }
+        });
+        refill.run();
+        sheetRefill = refill;
+        // P31: LONG-PRESS A MODEL = ★ pin/unpin. Instant, in place, with
+        // the haptic the deck long-press set as the pattern.
+        lv.setOnItemLongClickListener((parent, v, pos, id4) -> {
+            Object[] it = items.get(pos);
+            if (!("m".equals(it[0]) || "f".equals(it[0]))) return true;
+            Models.Prov pr = (Models.Prov) it[1];
+            Models.Mdl m = (Models.Mdl) it[2];
+            Theme.haptic(lv);
+            boolean pinned = Models.toggleFav(ChatActivity.this, pr.id, m.id);
+            Toast.makeText(ChatActivity.this, pinned
+                    ? "★ " + m.name + " pinned to Favorites"
+                    : m.name + " removed from Favorites",
+                    Toast.LENGTH_SHORT).show();
+            refill.run();                    // shelf updates in place
+            return true;
+        });
+        lv.setOnItemClickListener((parent, v, pos, id4) -> {
+            Object[] it = items.get(pos);
+            if ("fh".equals(it[0])) return;   // the shelf header is inert
+            if ("h".equals(it[0])) {
+                // P15: headers never steal the sheet. Unconfigured provider →
+                // point at the keys screen in place (P14 closed the whole
+                // picker here, which read as "tapping the picker breaks it").
+                Models.Prov pr = (Models.Prov) it[1];
+                if (!pr.usable && !pr.configured)
+                    Toast.makeText(this, pr.name + " needs its own key — tap "
+                            + "＋ key beside its name (⌘ → API keys), paste, "
+                            + "then tap ↻ up top",
+                            Toast.LENGTH_SHORT).show();
+                return;
+            }
+            if (!("m".equals(it[0]) || "f".equals(it[0]))) return;
+            Models.Prov pr = (Models.Prov) it[1];
+            Models.Mdl m = (Models.Mdl) it[2];
+            // P26: discovery-catalog entries are now SELECTABLE — the field
+            // asked "why can't I select them?". The old hard refusal (the
+            // server would answer "Model not found") treated the user like
+            // they can't read a dim row: the free list ROTATES, so a
+            // catalog pick may well work. Try it; if the server refuses,
+            // the run-time model-not-found self-heal (fixed in P25) clears
+            // the pick and re-sends with the server default — one honest
+            // note in the chat, no dead end, no double token burn.
+            if (!m.live) {
+                if (pr.usable) {
+                    Models.save(this, pr.id, m.id, true);
+                    refreshChips();
+                    // P27: the P26 toast was THREE lines of LONG toast —
+                    // a gray wall over the sheet (field shot). The hint
+                    // line at the sheet's bottom says it without covering
+                    // anything, and a short toast confirms the pick.
+                    Toast.makeText(this, "model → " + m.name + " (try-anyway)",
+                            Toast.LENGTH_SHORT).show();
+                    if (sheetHint != null) {
+                        sheetHint.setText(m.name + " is in the discovery catalog — "
+                                + "trying it. If the server can't serve it, the run "
+                                + "falls back to the default automatically");
+                        sheetHint.setTextColor(Theme.cr(this, R.color.accent_light));
+                    }
+                    sh.dismiss();
+                } else {
+                    // P16: say WHICH key — Zen and Go are separate, and that
+                    // distinction is the whole P16 key fix. Without a key the
+                    // server can't use the provider at all, so a try is noise.
+                    String why = "no key for " + pr.name + " yet — "
+                            + (pr.id.startsWith("opencode")
+                                ? "add the " + pr.name + " key in ⌘ → API keys "
+                                  + "(separate from your other opencode key)"
+                                : "⌘ → API keys first")
+                            + ", then tap ↻ up top";
+                    Toast.makeText(this, "no key for " + pr.name,
+                            Toast.LENGTH_SHORT).show();
+                    if (sheetHint != null) {
+                        sheetHint.setText(why);
+                        sheetHint.setTextColor(Theme.cr(this, R.color.accent_light));
+                    }
+                }
+                return;
+            }
+            Models.save(this, pr.id, m.id, false);
+            // P11: chat picks are PER-CHAT only — writing them into
+            // opencode.json made every future session (and every fallback
+            // body) hostage to a model the catalog can rotate away.
+            // Server-wide default stays in Settings → Default model.
+            refreshChips();
+            // P42: the pill's denominator is model-shaped — repaint NOW,
+            // or it keeps the previous model's limit until the next hub
+            // event while the popover (fresh read) already disagrees.
+            refreshServerUi();
+            // P42: the compaction floor is also model-shaped — re-pin it
+            // for the newly picked model (lands on the next server boot;
+            // the ownership rule updates only app-written values, never
+            // the user's own).
+            try {
+                // P42-check: the floor follows the EFFECTIVE window — the
+                // user's cap counts, or a capped model never compacts.
+                long win = CompactionPolicy.effectiveWindow(
+                        Models.bundledLimit(this, pr.id, m.id),
+                        AuthStore.contextLimit(this, pr.id, m.id));
+                if (win > 0) AuthStore.ensureCompactionPreserve(this, win);
+            } catch (Exception ignored) {}
+            Toast.makeText(this, (!pr.configured && !"opencode".equals(pr.id)
+                    ? "no key yet for " + pr.name + " — ⌘ → API keys · " : "")
+                    + "model → " + pr.id + "/" + m.id
+                    + (m.free ? " (free)" : ""),
+                    Toast.LENGTH_LONG).show();
+            sh.dismiss();
+        });
+    }
+
+    private int countModels(List<Models.Prov> provs) {
+        int n = 0;
+        for (Models.Prov p : provs) n += p.models.size();
+        return n;
+    }
+
+    // ------------------------------------------------------------- misc
+
+    private void copyLast() {
+        String last = null;
+        synchronized (lock) {
+            for (int i = rows.size() - 1; i >= 0; i--) {
+                RunHub.Row r = rows.get(i);
+                if (r.kind == K_ASSISTANT && r.text.length() > 0) {
+                    last = r.text.toString();
+                    break;
+                }
+            }
+        }
+        if (last == null) {
+            Toast.makeText(this, "nothing to copy yet", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        cm.setPrimaryClip(ClipData.newPlainText("response", last));
+        Toast.makeText(this, "copied " + last.length() + " chars", Toast.LENGTH_SHORT).show();
+    }
+
+    private static final int REQ_EXPORT = 41;
+    private boolean exportPending;
+
+    private void exportChat() {
+        if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            exportPending = true;
+            requestPermissions(new String[]{
+                    android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                    android.Manifest.permission.READ_EXTERNAL_STORAGE}, REQ_EXPORT);
+            return;
+        }
+        doExport();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
+        if (code == REQ_EXPORT) {
+            if (exportPending) { exportPending = false; doExport(); }
+        }
+    }
+
+    private void doExport() {
+        ex.execute(() -> {
+            StringBuilder sb = new StringBuilder();
+            synchronized (lock) {
+                for (RunHub.Row r : rows) {
+                    switch (r.kind) {
+                        case K_USER:
+                            sb.append("## you\n").append(r.text).append("\n\n");
+                            break;
+                        case K_ASSISTANT:
+                            sb.append("## agent").append(
+                                    r.meta == null ? "" : "  (" + r.meta + ")")
+                                    .append('\n').append(r.text).append("\n\n");
+                            break;
+                        case K_REASON:
+                            sb.append("> thinking: ").append(r.text).append("\n\n");
+                            break;
+                        case K_TOOL:
+                            sb.append("> tool ").append(r.tool).append(" [")
+                                    .append(r.status).append("] ")
+                                    .append(r.title).append('\n');
+                            if (r.output.length() > 0)
+                                sb.append("```\n").append(r.output).append("\n```\n");
+                            sb.append('\n');
+                            break;
+                        case K_ERR:
+                            sb.append("!! ").append(r.text).append(' ')
+                                    .append(r.output).append("\n\n");
+                            break;
+                        default:
+                            sb.append("-- ").append(r.text).append("\n\n");
+                    }
+                }
+            }
+            String out;
+            String where;
+            try {
+                File dir = android.os.Environment
+                        .getExternalStoragePublicDirectory(
+                                android.os.Environment.DIRECTORY_DOWNLOADS);
+                if (!dir.exists()) dir.mkdirs();
+                String ts = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
+                        .format(new Date());
+                File f = new File(dir, "opencode-chat-" + ts + ".txt");
+                try (OutputStream o = new FileOutputStream(f)) {
+                    o.write(sb.toString().getBytes("UTF-8"));
+                }
+                out = "saved " + f.getName();
+                where = f.getAbsolutePath();
+            } catch (Exception e) {
+                try {
+                    File f = new File(getExternalFilesDir(null),
+                            "opencode-chat-" + System.currentTimeMillis() + ".txt");
+                    try (OutputStream o = new FileOutputStream(f)) {
+                        o.write(sb.toString().getBytes("UTF-8"));
+                    }
+                    out = "saved " + f.getAbsolutePath();
+                    where = out;
+                } catch (Exception e2) {
+                    out = "export failed: " + e2;
+                    where = null;
+                }
+            }
+            final String msg = out;
+            final String fWhere = where;
+            ui.post(() -> {
+                Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
+                if (fWhere != null) sys("chat exported → " + fWhere);
+            });
+        });
+    }
+
+    // ---------------------------------------------------------- helpers
+
+    private static double num(Object o) {
+        return (o instanceof Number) ? ((Number) o).doubleValue() : 0;
+    }
+
+    private static String nz(String s, String dflt) {
+        return (s == null || s.isEmpty()) ? dflt : s;
+    }
+
+    // P42: relTime(double sec) deleted — its implicit epoch-seconds contract
+    // was the root cause of the "20000 days ago" field bug; Resilience.ago()
+    // is the single, unit-explicit, JVM-tested renderer now.
+}

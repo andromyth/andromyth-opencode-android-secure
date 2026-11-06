@@ -1,0 +1,738 @@
+package ai.opencode.app;
+
+import android.content.Context;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * P9 model catalog: EVERY provider the server knows + the FULL models.dev
+ * catalog for discovery.
+ *
+ * Problem this fixes (user): "the model select screen only shows opencode
+ * zen free models like 7 of em and nothing else". /config/providers only
+ * lists providers that are usable with current auth — so with no keys it
+ * degrades to the bundled free tier. The app now ALSO fetches
+ * https://models.dev/api.json (the exact catalog opencode syncs from) and
+ * merges it in: configured providers first, everything else searchable
+ * below, with a clear "(no key)" marker. Catalog is cached on disk so the
+ * sheet opens instantly and works offline.
+ *
+ * Parsing stays defensive: whatever parses, parses; nothing throws.
+ */
+public final class Models {
+
+    /** One selectable (providerID, modelID) pair (flat form, kept for compat). */
+    public static final class Item {
+        public String provider, id, label;
+    }
+
+    /** Grouped provider, P6/P9. */
+    public static final class Prov {
+        public String id, name;
+        public boolean configured;          // has a key in auth.json
+        public boolean usable;              // listed by /config/providers
+        public final List<Mdl> models = new ArrayList<>();
+    }
+
+    public static final class Mdl {
+        public String id, name, desc;
+        public boolean free;                // P14: zero input+output cost
+        public double costIn, costOut;      // P14: $/Mtok, shown in the sheet
+        /** P25: context window (tokens) from the models.dev `limit.context`
+         *  shape — drives the chat's context-depth meter. 0 = unknown. */
+        public long ctx;
+        /** P41: the window the RUNNING SERVER reported for this model
+         *  (its own /config/providers entry — the number its overflow
+         *  logic actually enforces). The catalog's claim can disagree
+         *  wildly (P27 saw server 200k vs catalog 1M); compaction fires
+         *  on the server's number, so the meter must prefer it. 0 when
+         *  the server never listed the model. */
+        public long ctxServer;
+        /** P15 RESTORES the P12 flag the P14 rework dropped — the exact
+         *  regression the user kept reporting ("the working model picker is
+         *  in the first p12"). true when the RUNNING SERVER listed this
+         *  model in /config/providers — picking it actually works.
+         *  models.dev/bundled entries are discovery-only: selectable-looking
+         *  but the server answers "Model not found", which is what made the
+         *  picker "broken" again after P14 let every catalog row save. */
+        public boolean live;
+    }
+
+    /** Last successful fetch — the picker reuses it for instant re-opens. */
+    private static volatile List<Prov> lastFetch = new ArrayList<>();
+
+    /** P13: where the last fetch's data came from — shown IN the picker so
+     *  "only 7 zen models" failures are visible on-screen, not a mystery. */
+    public static volatile String lastSource = "no fetch yet";
+
+    private Models() {}
+
+    public static List<Prov> lastFetch() {
+        return lastFetch;
+    }
+
+    /** Fetch ALL providers + models (server list ⊕ models.dev catalog ⊕
+     *  bundled snapshot floor — P13: the picker now shows the full catalog
+     *  even with zero network, so “only 7 zen free models” can't return). */
+    public static List<Prov> fetch(Context c) {
+        Map<String, Prov> byId = new LinkedHashMap<>();
+        boolean serverOk = false;
+        String catSource = null;
+
+        // ---- 1. the running server (authoritative for what is usable) ----
+        try {
+            Api.Resp r = Api.get("/config/providers");
+            if (r.ok()) {
+                Object root = Json.parse(r.body);
+                Map<String, Object> m = Json.obj(root);
+                List<Object> pl = null;
+                if (m != null) {
+                    pl = Json.arr(m.get("providers"));
+                    if (pl == null) {
+                        Map<String, Object> pm = Json.map(m, "providers");
+                        if (pm != null) {
+                            for (Map.Entry<String, Object> e : pm.entrySet()) {
+                                Map<String, Object> p = Json.obj(e.getValue());
+                                if (p == null) continue;
+                                if (Json.str(p, "id") == null) p.put("id", e.getKey());
+                                collectProvider(byId, p, c, true);
+                            }
+                        }
+                    }
+                } else {
+                    pl = Json.arr(root);
+                }
+                if (pl != null) {
+                    for (Object po : pl) {
+                        Map<String, Object> p = Json.obj(po);
+                        if (p != null) collectProvider(byId, p, c, true);
+                    }
+                }
+                serverOk = !byId.isEmpty();
+            }
+        } catch (Exception ignored) {}
+
+        // ---- 2. models.dev catalog (full discovery, disk-cached) ----
+        // P15: NO early return here — the P12a bug (map-shaped provider
+        // responses skipped the catalog merge) stays fixed; every source
+        // always merges. The fix for "picker looks broken" is the live
+        // flag above + the sheet refusing dead picks, NOT a smaller list.
+        String cat = httpGet("https://models.dev/api.json", 8000);
+        if (cat != null && cat.length() > 1000) {
+            writeCache(c, cat);
+            catSource = "models.dev live";
+        } else {
+            cat = readCache(c);
+            if (cat != null && cat.length() > 1000) catSource = "cached catalog";
+        }
+        if (catSource == null) {
+            // P13: bundled snapshot ships in the APK — the catalog floor.
+            cat = readAsset(c, "models-dev.json");
+            if (cat != null && cat.length() > 1000) catSource = "bundled catalog";
+        }
+        if (cat != null) {
+            try {
+                Map<String, Object> root = Json.obj(Json.parse(cat));
+                if (root != null) {
+                    for (Map.Entry<String, Object> e : root.entrySet()) {
+                        Map<String, Object> p = Json.obj(e.getValue());
+                        if (p == null) continue;
+                        if (Json.str(p, "id") == null) p.put("id", e.getKey());
+                        collectProvider(byId, p, c, false);
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+
+        // P33: the server wasn't heard from — last-known live flags stand
+        // (see carryLive), so a restart/boot blip can't dim the picker.
+        if (!serverOk) carryLive(lastFetch, byId);
+
+        lastFetch = order(byId);
+        lastSource = (serverOk ? "server" : "server offline")
+                + " · " + (catSource != null ? catSource : "no catalog");
+        return lastFetch;
+    }
+
+    /**
+     * P33 pure rule — a server BLIP must not flatten the picker. When the
+     * running server did not answer (restarting after a key change, boot,
+     * hibernate wake, network hiccup), the catalog-only fetch would mark
+     * EVERY model not-live: the whole sheet went dim + "· catalog", which
+     * the field read as everything going low-contrast white — and
+     * every tap answered "no key" or refused the pick. The rule: when the
+     * server was not heard from, a model the server listed live LAST time
+     * stays live now (last-known truth beats a missing answer). A fetched
+     * answer (serverOk) never enters this path — fresh truth wins there.
+     * Never clears, never invents: models the server never served stay
+     * exactly as catalog-only.
+     */
+    static void carryLive(List<Prov> prev, Map<String, Prov> next) {
+        if (prev == null || prev.isEmpty() || next == null || next.isEmpty())
+            return;
+        Map<String, Set<String>> served = new LinkedHashMap<>();
+        for (Prov p : prev) {
+            if (p == null || p.id == null) continue;
+            Set<String> mids = new HashSet<>();
+            for (Mdl m : p.models) if (m != null && m.id != null && m.live)
+                mids.add(m.id);
+            if (!mids.isEmpty()) served.put(p.id, mids);
+        }
+        for (Prov p : next.values()) {
+            Set<String> mids = served.get(p.id);
+            if (mids == null) continue;
+            for (Mdl m : p.models)
+                if (m != null && mids.contains(m.id)) { m.live = true; p.usable = true; }
+        }
+    }
+
+    /** P15: usable (server-live) providers first — the P12a order that made
+     *  the picker feel right — then configured, then alphabetical. */
+    private static List<Prov> order(Map<String, Prov> byId) {
+        List<Prov> out = new ArrayList<>(byId.values());
+        out.sort((a, b) -> {
+            if (a.usable != b.usable) return a.usable ? -1 : 1;   // live first
+            if (a.configured != b.configured) return a.configured ? -1 : 1;
+            return a.name.toLowerCase(Locale.US)
+                    .compareTo(b.name.toLowerCase(Locale.US));
+        });
+        return out;
+    }
+
+    /** Package-private hook so the P15 regression tests pin the sort. */
+    static List<Prov> orderForTest(Map<String, Prov> byId) {
+        return order(byId);
+    }
+
+    private static void collectProvider(Map<String, Prov> byId, Map<String, Object> p,
+                                        Context c, boolean fromServer) {
+        String pid = Json.str(p, "id");
+        if (pid == null || pid.isEmpty()) return;
+        Prov prov = byId.get(pid);
+        if (prov == null) {
+            prov = new Prov();
+            prov.id = pid;
+            String pname = Json.str(p, "name");
+            prov.name = (pname == null || pname.isEmpty()) ? pid : pname;
+            prov.configured = AuthStore.hasKey(c, pid);
+            byId.put(pid, prov);
+        }
+        if (fromServer) {
+            prov.usable = true;
+            if (AuthStore.hasKey(c, pid)) prov.configured = true;
+        }
+        Object models = p.get("models");
+        if (models instanceof Map) {
+            Set<String> have = new HashSet<>();
+            for (Mdl m : prov.models) have.add(m.id);
+            for (Map.Entry<String, Object> e
+                    : ((Map<String, Object>) models).entrySet()) {
+                Map<String, Object> mm = Json.obj(e.getValue());
+                if (mm == null) continue;
+                if (Json.str(mm, "id") == null) mm.put("id", e.getKey());
+                String mid = Json.str(mm, "id");
+                if (mid == null) continue;
+                if (have.contains(mid)) {
+                    // P27 flicker fix: the SAME model arrives from two
+                    // sources with DIFFERENT context windows (the server's
+                    // provider entry vs the models.dev catalog — field saw
+                    // the Σ pill say 47% (200k window) then drop to 8% (1M)
+                    // as fetches disagreed). The merge is now DETERMINISTIC:
+                    // the curated catalog's limit wins whenever it has one.
+                    if (!fromServer) upgradeCtx(prov, mid, mm);
+                    continue;
+                }
+                addModel(prov, mm, fromServer);
+                have.add(mid);
+            }
+        } else {
+            List<Object> ml = Json.arr(models);
+            if (ml != null) for (Object mo : ml) addModel(prov, Json.obj(mo), fromServer);
+        }
+    }
+
+    /** P27: let the models.dev catalog correct an already-merged model's
+     *  context window. Pure rule, JVM-pinned: catalog limit (>0) always
+     *  wins; otherwise the first-seen value stands. P41: the catalog
+     *  only corrects the DISPLAY catalog value — the server's own
+     *  ctxServer stays untouched, because the sandbox enforces ITS
+     *  number, not the catalog's. */
+    static void upgradeCtx(Prov prov, String mid, Map<String, Object> mm) {
+        if (prov == null || mid == null || mm == null) return;
+        long cat = parseCtx(mm);
+        if (cat <= 0) return;
+        for (Mdl m : prov.models) {
+            if (mid.equals(m.id)) { m.ctx = cat; return; }
+        }
+    }
+
+    private static void addModel(Prov prov, Map<String, Object> mm, boolean live) {
+        if (mm == null) return;
+        String mid = Json.str(mm, "id");
+        if (mid == null || mid.isEmpty()) return;
+        Mdl mdl = new Mdl();
+        mdl.id = mid;
+        String mn = Json.str(mm, "name");
+        mdl.name = (mn == null || mn.isEmpty()) ? mid : mn;
+        String d = Json.str(mm, "description");
+        mdl.desc = (d == null || d.isEmpty()) ? null : d;
+        mdl.live = live;                    // P15: P12 semantics restored
+        // P14: cost block (models.dev schema) — $ per Mtok. Zero input AND
+        // output cost = the "free" badge in the picker (31 zen models today).
+        try {
+            Map<String, Object> cost = Json.obj(mm.get("cost"));
+            if (cost != null) {
+                mdl.costIn = Json.num(cost, "input");
+                mdl.costOut = Json.num(cost, "output");
+                mdl.free = mdl.costIn == 0 && mdl.costOut == 0;
+            }
+        } catch (Exception ignored) {}
+        mdl.ctx = parseCtx(mm);             // P25: context window
+        if (live) mdl.ctxServer = mdl.ctx;  // P41: the server's own claim
+        prov.models.add(mdl);
+    }
+
+    /** P25: context window out of a model object. models.dev schema:
+     *  "limit":{"context":200000,"output":8192}; some server shapes
+     *  put context_window / context at top level. Defensive: whatever
+     *  parses, parses; 0 when nothing sane is there. Package-private
+     *  static so the JVM suite pins it. */
+    static long parseCtx(Map<String, Object> mm) {
+        if (mm == null) return 0;
+        long v = 0;
+        try {
+            Map<String, Object> limit = Json.obj(mm.get("limit"));
+            if (limit != null) v = (long) Json.num(limit, "context");
+            if (v <= 0) v = (long) Json.num(mm, "context_window");
+            if (v <= 0) v = (long) Json.num(mm, "context");
+        } catch (Exception ignored) {}
+        // sane bounds: a "context window" under 1k or over 100M is junk
+        return (v >= 1024 && v <= 100_000_000L) ? v : 0;
+    }
+
+    /** P25: the context window (tokens) of the picked model, or 0 when
+     *  unknown (no pick, not in the last fetch, or the catalog had no
+     *  limit for it). Reads the in-memory fetch only — never network. */
+    public static long contextLimitFor(List<Prov> provs, String provider, String id) {
+        if (provs == null || provider == null || id == null) return 0;
+        for (Prov p : provs) {
+            if (!provider.equals(p.id)) continue;
+            for (Mdl m : p.models) {
+                if (id.equals(m.id)) return m.ctx;
+            }
+        }
+        return 0;
+    }
+
+    /** P41: the window the RUNNING SERVER reported for this model, or 0.
+     *  This is the number the sandbox's overflow/compaction logic
+     *  enforces; the meter's denominator must be the same number to be
+     *  honest about how close a compaction is. Package-private so the
+     *  JVM suite pins the lookup. */
+    static long serverLimitFor(List<Prov> provs, String provider, String id) {
+        if (provs == null || provider == null || id == null) return 0;
+        for (Prov p : provs) {
+            if (!provider.equals(p.id)) continue;
+            for (Mdl m : p.models) {
+                if (id.equals(m.id)) return m.ctxServer;
+            }
+        }
+        return 0;
+    }
+
+    /** P41: the CATALOG window (display/discovery truth), or 0 — the
+     *  counterpart of {@link #serverLimitFor} for the disagreement note. */
+    static long catalogLimitFor(List<Prov> provs, String provider, String id) {
+        return contextLimitFor(provs, provider, id);
+    }
+
+    /** P41: the window that decides compaction for the picked model —
+     *  the server's own claim first (that is what the sandbox enforces),
+     *  the catalog's when the server never listed the model (catalog-
+     *  only picks still work through custom providers), 0 when neither
+     *  source knows. Pure; the suite pins the precedence. */
+    static long overflowLimitFor(List<Prov> provs, String provider, String id) {
+        long srv = serverLimitFor(provs, provider, id);
+        if (srv > 0) return srv;
+        return catalogLimitFor(provs, provider, id);
+    }
+
+    // ------------------------------------------------- P27: sticky window
+
+    private static final String KEY_CTXWIN = "ctxwin";
+    /** At most this many (provider/model → window) entries live in prefs. */
+    static final int CTXWIN_CAP = 64;
+
+    /** The context window for the Σ pill, DETERMINISTIC for a session:
+     *  P41 — the LIVE SERVER's number decides (the exact value the
+     *  sandbox's overflow/compaction logic enforces — the field saw the
+     *  meter reassure "16% of 1.3M" while the server compacted at its
+     *  own much smaller line); the catalog stands in only when the
+     *  server never listed the model, and the last KNOWN value stands
+     *  in for a server blip. Known values are stashed for the next cold
+     *  start. Never network. */
+    public static long resolveLimit(Context c, List<Prov> provs,
+                                    String provider, String id) {
+        long v = overflowLimitFor(provs, provider, id);
+        if (v > 0) {
+            stashLimit(c, provider, id, v);
+            return v;
+        }
+        return stickyLimit(c, provider, id);
+    }
+
+    private static java.util.Map<String, String> ctxWinMap(Context c) {
+        java.util.Map<String, String> out = new java.util.LinkedHashMap<>();
+        try {
+            java.util.Map<String, ?> all = c.getSharedPreferences(PREFS,
+                    Context.MODE_PRIVATE).getAll();
+            for (java.util.Map.Entry<String, ?> e : all.entrySet()) {
+                if (e.getKey() != null && e.getKey().startsWith(KEY_CTXWIN + ":")
+                        && e.getValue() instanceof String) {
+                    out.put(e.getKey(), (String) e.getValue());
+                }
+            }
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    static void stashLimit(Context c, String provider, String id, long ctx) {
+        if (c == null || provider == null || id == null || ctx <= 0) return;
+        try {
+            android.content.SharedPreferences ed0 = c.getSharedPreferences(PREFS,
+                    Context.MODE_PRIVATE);
+            String key = KEY_CTXWIN + ":" + provider + "/" + id;
+            String cur = ed0.getString(key, null);
+            if (cur != null && cur.equals(String.valueOf(ctx))) return;
+            android.content.SharedPreferences.Editor ed = ed0.edit().putString(
+                    key, String.valueOf(ctx));
+            // bounded: eldest entries (insertion order of the map) evicted
+            java.util.Map<String, String> all = ctxWinMap(c);
+            all.remove(key);
+            while (all.size() >= CTXWIN_CAP) {
+                String eldest = all.keySet().iterator().next();
+                ed.remove(eldest);
+                all.remove(eldest);
+            }
+            ed.apply();
+        } catch (Exception ignored) {}
+    }
+
+    static long stickyLimit(Context c, String provider, String id) {
+        if (c == null || provider == null || id == null) return 0;
+        try {
+            String v = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .getString(KEY_CTXWIN + ":" + provider + "/" + id, null);
+            return v == null ? 0 : Long.parseLong(v);
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    // ---------------------------------------------- P41 bundled snapshot
+
+    /** The bundled models.dev snapshot, parsed once per process. */
+    private static volatile Map<String, Object> bundledRoot;
+    private static final Object BUNDLED_LOCK = new Object();
+
+    /**
+     * P41: the context window for (provider, id) straight from the
+     * BUNDLED models.dev snapshot in the APK — available before the
+     * server ever boots, so the compaction floor can be pinned in
+     * opencode.json on the very first start. The live server's number
+     * still wins for the METER once a fetch lands; this offline lookup
+     * only seeds the boot-time write, and the safety analysis in
+     * {@link CompactionPolicy#preserveRecentTokensFor} holds whenever
+     * the catalog overstates the real window. Never network, never
+     * throws; 0 when anything is missing. */
+    public static long bundledLimit(Context c, String provider, String id) {
+        if (c == null || provider == null || id == null) return 0;
+        try {
+            Map<String, Object> root = bundledRoot;
+            if (root == null) {
+                synchronized (BUNDLED_LOCK) {
+                    if (bundledRoot == null) {
+                        String raw = readAsset(c, "models-dev.json");
+                        Object parsed = raw == null ? null : Json.parse(raw);
+                        bundledRoot = Json.obj(parsed);
+                    }
+                    root = bundledRoot;
+                }
+            }
+            if (root == null) return 0;
+            Map<String, Object> p = Json.obj(root.get(provider));
+            if (p == null) return 0;
+            Map<String, Object> models = Json.obj(p.get("models"));
+            if (models == null) return 0;
+            Map<String, Object> m = Json.obj(models.get(id));
+            if (m == null) return 0;
+            return parseCtx(m);
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    // ------------------------------------------------------- catalog net
+
+    /** Plain-HTTPS GET to models.dev (bionic/Java resolver — no sandbox). */
+    private static String httpGet(String url, int timeoutMs) {
+        try {
+            HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(timeoutMs);
+            c.setReadTimeout(timeoutMs);
+            c.setUseCaches(false);
+            c.setRequestProperty("Accept", "application/json");
+            int code = c.getResponseCode();
+            if (code != 200) { c.disconnect(); return null; }
+            String body = Api.readAll(c.getInputStream());
+            c.disconnect();
+            return body;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static File cacheFile(Context c) {
+        return new File(c.getFilesDir(), "models-cache.json");
+    }
+
+    private static void writeCache(Context c, String body) {
+        try {
+            File f = cacheFile(c);
+            File tmp = new File(f.getParentFile(), f.getName() + ".part");
+            try (OutputStream o = new FileOutputStream(tmp)) {
+                o.write(body.getBytes("UTF-8"));
+            }
+            if (f.exists()) f.delete();
+            tmp.renameTo(f);
+        } catch (Exception ignored) {}
+    }
+
+    private static String readCache(Context c) {
+        try {
+            return Api.readAll(new FileInputStream(cacheFile(c)));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** P13: APK-bundled models.dev snapshot — the offline catalog floor. */
+    private static String readAsset(Context c, String name) {
+        try {
+            return Api.readAll(c.getAssets().open(name));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** P29: the full catalog row for (provider, id), or null — the cost
+     *  predictor reads pricing/context from here. Pure, null-safe. */
+    public static Mdl find(List<Prov> provs, String provider, String id) {
+        if (provs == null || provider == null || id == null) return null;
+        for (Prov p : provs) {
+            if (!provider.equals(p.id)) continue;
+            for (Mdl m : p.models) {
+                if (id.equals(m.id)) return m;
+            }
+        }
+        return null;
+    }
+
+    /** True when (provider, id) exists AND the running server serves it.
+     *  P15: back to the P12 rule — discovery (models.dev / bundled) entries
+     *  do NOT pass, so validateSelectedModel() self-heals dead picks BEFORE
+     *  the request instead of the server answering "Model not found". This
+     *  exact gate is why the first P12 picker felt like it worked. */
+    public static boolean available(List<Prov> provs, String provider, String id) {
+        if (provs == null || provider == null || id == null) return false;
+        for (Prov p : provs) {
+            if (!provider.equals(p.id)) continue;
+            for (Mdl m : p.models)
+                if (id.equals(m.id)) return m.live;
+        }
+        return false;
+    }
+
+    /** Flatten to a plain item list (kept for send-path compatibility). */
+    public static List<Item> flatten(List<Prov> provs) {
+        List<Item> out = new ArrayList<>();
+        for (Prov p : provs) {
+            for (Mdl m : p.models) {
+                Item it = new Item();
+                it.provider = p.id;
+                it.id = m.id;
+                it.label = m.name + "   ·   " + p.id;
+                out.add(it);
+            }
+        }
+        return out;
+    }
+
+    // ------------------------------------------------- selection (prefs)
+
+    private static final String PREFS = "oc";
+    private static final String KEY = "model";
+    /** P26: set when the user deliberately picks a discovery-catalog model
+     *  ("· catalog", dim). The free list rotates, so the pick may work —
+     *  and if the server refuses, the run-time model-not-found self-heal
+     *  clears it and falls back to the server default. */
+    private static final String KEY_FORCED = "model_forced";
+
+    /** Persist the picked model as "providerID/modelID" (server-listed pick). */
+    public static void save(Context c, String provider, String id) {
+        save(c, provider, id, false);
+    }
+
+    /** Persist the pick + whether it was forced out of the discovery
+     *  catalog (try-anyway semantics). */
+    public static void save(Context c, String provider, String id, boolean forced) {
+        c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString(KEY, provider + "/" + id)
+                .putBoolean(KEY_FORCED, forced)
+                .apply();
+    }
+
+    /** Clear the per-session override. */
+    public static void clear(Context c) {
+        c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .remove(KEY).remove(KEY_FORCED).apply();
+    }
+
+    /** True when the current pick was a deliberate catalog choice (P26). */
+    public static boolean forced(Context c) {
+        if (c == null) return false;
+        try {
+            return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .getBoolean(KEY_FORCED, false);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** The picked model as {providerID, modelID}, or null for server default. */
+    public static String[] selected(Context c) {
+        String s = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY, null);
+        if (s == null) return null;
+        int i = s.indexOf('/');
+        if (i <= 0 || i == s.length() - 1) return null;
+        return new String[]{s.substring(0, i), s.substring(i + 1)};
+    }
+
+    // ------------------------------------------------- favorites (P31)
+
+    /**
+     * P31 — ★ Favorites. Long-press a model in the picker and it is
+     * pinned to the top of the sheet (a Favorites section before every
+     * provider), so the models you actually use are one tap away.
+     *
+     * Storage is an ordered JSON array of "providerID/modelID" strings in
+     * the "oc" prefs (key "model_favs") — insertion order = display
+     * order, oldest favorites first. Display-only state: a rotating free
+     * model losing its catalog entry hides its row but never deletes the
+     * favorite (the self-heal that clears the SELECTION must not punish
+     * pins). Pure serialization helpers are JVM-pinned in P31Test.
+     */
+    public static final int FAV_CAP = 8;
+    private static final String KEY_FAVS = "model_favs";
+
+    /** The favorites as ordered {providerID, modelID} pairs. */
+    public static List<String[]> favs(Context c) {
+        if (c == null) return new ArrayList<>();
+        try {
+            String s = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .getString(KEY_FAVS, null);
+            return favsFromJson(s);
+        } catch (Exception e) {
+            return new ArrayList<>();
+        }
+    }
+
+    public static boolean isFav(Context c, String provider, String id) {
+        if (provider == null || id == null) return false;
+        for (String[] f : favs(c))
+            if (provider.equals(f[0]) && id.equals(f[1])) return true;
+        return false;
+    }
+
+    /**
+     * Toggle a favorite. Returns true when the model is NOW a favorite
+     * (added), false when it was removed. Adding past the cap keeps the
+     * oldest FAV_CAP entries and refuses the new one (false, unchanged) —
+     * an honest limit instead of a silently rotated list.
+     */
+    public static boolean toggleFav(Context c, String provider, String id) {
+        if (c == null || provider == null || id == null) return false;
+        List<String[]> cur = favs(c);
+        List<String[]> next = new ArrayList<>();
+        boolean had = false;
+        for (String[] f : cur) {
+            if (provider.equals(f[0]) && id.equals(f[1])) { had = true; continue; }
+            next.add(f);
+        }
+        if (had) {
+            writeFavs(c, next);
+            return false;
+        }
+        if (next.size() >= FAV_CAP) {
+            return false;                    // cap: refused, list unchanged
+        }
+        next.add(new String[]{provider, id});
+        writeFavs(c, next);
+        return true;
+    }
+
+    private static void writeFavs(Context c, List<String[]> favs) {
+        c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString(KEY_FAVS, favsToJson(favs)).apply();
+    }
+
+    /** Ordered list → '["p/m","p2/m2"]'. Empty list → "[]". */
+    static String favsToJson(List<String[]> favs) {
+        StringBuilder b = new StringBuilder("[");
+        boolean first = true;
+        if (favs != null) for (String[] f : favs) {
+            if (f == null || f.length < 2 || f[0] == null || f[1] == null) continue;
+            if (!first) b.append(',');
+            first = false;
+            b.append(Json.quote(f[0] + "/" + f[1]));
+        }
+        return b.append(']').toString();
+    }
+
+    /** JSON → ordered pairs; malformed entries dropped, dupes kept once,
+     *  never more than FAV_CAP. Never null. */
+    static List<String[]> favsFromJson(String j) {
+        List<String[]> out = new ArrayList<>();
+        try {
+            List<Object> arr = Json.arr(Json.parse(j));
+            if (arr != null) for (Object o : arr) {
+                if (!(o instanceof String)) continue;
+                String s = (String) o;
+                int i = s.indexOf('/');
+                if (i <= 0 || i == s.length() - 1) continue;
+                String[] pair = {s.substring(0, i), s.substring(i + 1)};
+                boolean dup = false;
+                for (String[] f : out)
+                    if (f[0].equals(pair[0]) && f[1].equals(pair[1])) { dup = true; break; }
+                if (!dup) out.add(pair);
+                if (out.size() >= FAV_CAP) break;
+            }
+        } catch (Exception ignored) {
+            // corrupt prefs → empty list, the picker still works
+        }
+        return out;
+    }
+}

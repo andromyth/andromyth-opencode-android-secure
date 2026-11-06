@@ -1,0 +1,19 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk.idsig
+oc_pkg.bin
+.gh_token
+worklog.md
+download/
+gh-repo/
+tool-results/
+upload/
+skills/
+
+# committed on purpose: deterministic debug signing so CI and devices share one key

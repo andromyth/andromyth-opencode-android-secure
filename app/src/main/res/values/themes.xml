@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- P8: dark-only, now AMOLED. windowAnimationStyle gives every
+         activity a fast slide/fade (150-220 ms) without touching code. -->
+    <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:colorPrimary">@color/accent</item>
+        <item name="android:colorPrimaryDark">@color/bg</item>
+        <item name="android:colorAccent">@color/accent_light</item>
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        <item name="android:windowAnimationStyle">@style/OcWindowAnim</item>
+        <!-- P27: ONE presentation for every sheet/popover (palette, model,
+             sessions, commands, confirms) — same surface, same motion. -->
+        <item name="android:alertDialogTheme">@style/OcSheet</item>
+    </style>
+
+    <!-- P27 sheet: near-black surface + hairline border, rounded top,
+         slide-up in / slide-down out (symmetric, 200 ms — inside the
+         170-220 ms window). Every AlertDialog in the app inherits this
+         by theme, so the graphite-gray system boxes from the field
+         screenshots are gone everywhere at once. -->
+    <style name="OcSheet" parent="android:Theme.Material.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/bg_sheet</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:colorPrimary">@color/accent</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        <item name="android:windowEnterAnimation">@anim/sheet_in</item>
+        <item name="android:windowExitAnimation">@anim/sheet_out</item>
+    </style>
+
+    <!-- P34: the bottom-sheet window motion — every Sheet in the app
+         rises from the bottom edge and sinks back the same way (back
+         button and scrim taps included, since the animation rides the
+         window, not the call site). -->
+    <style name="OcSheetWindow">
+        <item name="android:windowEnterAnimation">@anim/sheet_rise_in</item>
+        <item name="android:windowExitAnimation">@anim/sheet_rise_out</item>
+    </style>
+
+    <!-- fast + snappy: nothing lingers longer than ~220 ms -->
+    <style name="OcWindowAnim" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/slide_in_right</item>
+        <item name="android:activityOpenExitAnimation">@anim/fade_out</item>
+        <item name="android:activityCloseEnterAnimation">@anim/fade_in</item>
+        <item name="android:activityCloseExitAnimation">@anim/slide_out_right</item>
+        <item name="android:taskOpenEnterAnimation">@anim/slide_in_right</item>
+        <item name="android:taskOpenExitAnimation">@anim/fade_out</item>
+    </style>
+
+    <!-- P31: sheet presentation for the oled palette -->
+    <style name="OcSheetOled" parent="android:Theme.Material.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/bg_sheet_oled</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:colorPrimary">@color/accent</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        
+        <item name="android:windowEnterAnimation">@anim/sheet_in</item>
+        <item name="android:windowExitAnimation">@anim/sheet_out</item>
+    </style>
+    <!-- P31: sheet presentation for the midnight palette -->
+    <style name="OcSheetMidnight" parent="android:Theme.Material.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/bg_sheet_midnight</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:colorPrimary">@color/accent</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        
+        <item name="android:windowEnterAnimation">@anim/sheet_in</item>
+        <item name="android:windowExitAnimation">@anim/sheet_out</item>
+    </style>
+    <!-- P31: sheet presentation for the graphite palette -->
+    <style name="OcSheetGraphite" parent="android:Theme.Material.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/bg_sheet_graphite</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:colorPrimary">@color/accent</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        
+        <item name="android:windowEnterAnimation">@anim/sheet_in</item>
+        <item name="android:windowExitAnimation">@anim/sheet_out</item>
+    </style>
+    <!-- P31: sheet presentation for the ember palette -->
+    <style name="OcSheetEmber" parent="android:Theme.Material.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/bg_sheet_ember</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:colorPrimary">@color/accent</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        
+        <item name="android:windowEnterAnimation">@anim/sheet_in</item>
+        <item name="android:windowExitAnimation">@anim/sheet_out</item>
+    </style>
+    <!-- P31: sheet presentation for the forest palette -->
+    <style name="OcSheetForest" parent="android:Theme.Material.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/bg_sheet_forest</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:colorPrimary">@color/accent</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        
+        <item name="android:windowEnterAnimation">@anim/sheet_in</item>
+        <item name="android:windowExitAnimation">@anim/sheet_out</item>
+    </style>
+    <!-- P31: sheet presentation for the paper palette -->
+    <style name="OcSheetPaper" parent="android:Theme.Material.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/bg_sheet_paper</item>
+        <item name="android:colorAccent">#3D63D8</item>
+        <item name="android:colorPrimary">#3D63D8</item>
+        <item name="android:textColorPrimary">#1B1D24</item>
+        <item name="android:textColorSecondary">#565B66</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowEnterAnimation">@anim/sheet_in</item>
+        <item name="android:windowExitAnimation">@anim/sheet_out</item>
+    </style>
+</resources>

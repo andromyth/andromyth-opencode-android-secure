@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- P32: the empty-state hero disc was the last P27-killed violet
+     gradient (#5B6CFF→#8B5CF6), frozen and blind to the palette. Now a
+     flat accent disc — the one-accent language — and because the solid
+     is @color/accent, retint() remaps it to the active palette. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+       android:shape="oval">
+    <solid android:color="@color/accent"/>
+</shape>

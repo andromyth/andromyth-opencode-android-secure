@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- OpenCode Mobile — P7 "the real chat app".
+
+     Single-purpose flow: launch → chat. MainActivity is only a boot screen
+     when the server isn't already healthy. No proot anywhere (P3-P6
+     sandbox removed): the bundled static binary runs natively via the
+     targetSdk-28 exec allowance, and a local CONNECT proxy bridges DNS.
+
+     usesCleartextTraffic: app talks ONLY to the in-process loopback server
+     (127.0.0.1:4096) and the local proxy.
+
+     FOREGROUND_SERVICE: hosts `opencode serve` for the whole app lifetime.
+     No foregroundServiceType needed — enforcement applies to apps targeting
+     API 34+, and we deliberately target 28 (Termux exec pattern).
+
+     POST_NOTIFICATIONS: intentionally NOT requested at runtime — apps with
+     targetSdk < 33 are granted it automatically on Android 13+. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- P12 keep-alive: exempt the app from battery killing (dialog intent)
+         and relaunch the sandbox after reboot (opt-in switch). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- legacy storage: agent file tools can reach /sdcard; chat export
+         writes to Downloads (Termux pattern — targetSdk 28). -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+    <!-- P52: install an APK the agent produced / the user found in Files. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+
+    <application
+        android:name=".App"
+        android:label="OpenCode"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:usesCleartextTraffic="true"
+        android:theme="@style/AppTheme"
+        android:allowBackup="false"
+        android:resizeableActivity="true"
+        android:requestLegacyExternalStorage="true">
+
+        <!-- P16 DeX: every activity handles its own configuration changes
+             (window resize, free-form/DeX, split-screen, keyboard) so a
+             stream never dies mid-run when the window changes. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density|uiMode"/>
+
+        <!-- P36: the launcher icon follows the theme — one alias per
+             palette, exactly ONE enabled at a time (LauncherIcon keeps
+             it that way and self-heals at boot; enable always precedes
+             disable so the launcher never sees a no-icon moment). The
+             classic alias keeps the P17 icon for fresh installs and
+             devices that never picked a theme. Every alias carries the
+             LAUNCHER filter — launchers resolve icons through it. -->
+        <activity-alias
+            android:name=".LauncherClassic"
+            android:targetActivity=".MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:label="OpenCode"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherOled"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:label="OpenCode"
+            android:icon="@mipmap/ic_launcher_oled"
+            android:roundIcon="@mipmap/ic_launcher_oled_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherMidnight"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:label="OpenCode"
+            android:icon="@mipmap/ic_launcher_midnight"
+            android:roundIcon="@mipmap/ic_launcher_midnight_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherGraphite"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:label="OpenCode"
+            android:icon="@mipmap/ic_launcher_graphite"
+            android:roundIcon="@mipmap/ic_launcher_graphite_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherEmber"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:label="OpenCode"
+            android:icon="@mipmap/ic_launcher_ember"
+            android:roundIcon="@mipmap/ic_launcher_ember_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherForest"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:label="OpenCode"
+            android:icon="@mipmap/ic_launcher_forest"
+            android:roundIcon="@mipmap/ic_launcher_forest_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherPaper"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:label="OpenCode"
+            android:icon="@mipmap/ic_launcher_paper"
+            android:roundIcon="@mipmap/ic_launcher_paper_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+
+        <!-- P8: the project deck — credit-card carousel, one sandbox per card -->
+        <activity
+            android:name=".HomeActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density|uiMode"/>
+
+        <activity
+            android:name=".ChatActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density|uiMode"/>
+
+        <!-- P8: animated settings hub -->
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density|uiMode"
+            android:label="Settings"/>
+
+        <activity
+            android:name=".KeysActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density|uiMode"
+            android:label="API keys"/>
+
+        <activity
+            android:name=".DiagnosticsActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density|uiMode"
+            android:label="Diagnostics"/>
+
+        <!-- P15: the visual project file manager (project-scoped browser) -->
+        <activity
+            android:name=".FilesActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density|uiMode"
+            android:label="Files"/>
+
+        <!-- P31: the interactive canvas — sandboxed WebView viewer for the
+             self-contained HTML pages the agent writes on request. JS on,
+             file/content access off, nothing auto-opens. -->
+        <activity
+            android:name=".CanvasActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density|uiMode"
+            android:label="Interactive canvas"/>
+
+        <service android:name=".ServerService" android:exported="false"/>
+
+        <!-- P52: open/share/install project files from the OS. A minimal
+             read-only provider maps content://ai.opencode.app.files/<path>
+             to app-accessible files (targetSdk 28 forbids file:// URIs). -->
+        <provider
+            android:name=".FileProvider"
+            android:authorities="ai.opencode.app.files"
+            android:exported="false"
+            android:grantUriPermissions="true"/>
+
+        <!-- P52: the storage manager — see what is eating space and clear it -->
+        <activity
+            android:name=".StorageActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density|uiMode"
+            android:label="Storage"/>
+
+        <!-- P12 keep-alive: opt-in reboot relaunch (Settings → keep alive) -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
+            </intent-filter>
+        </receiver>
+
+        <!-- P50 keep-alive: the watchdog alarm chain — resurrects the
+             foreground service after an OEM/OS process kill whenever the
+             sandbox is still wanted (Settings → keep alive → watchdog,
+             default ON). No intent-filter: explicitly targeted by
+             PendingIntent only. -->
+        <receiver
+            android:name=".WatchdogReceiver"
+            android:exported="false"/>
+    </application>
+</manifest>
