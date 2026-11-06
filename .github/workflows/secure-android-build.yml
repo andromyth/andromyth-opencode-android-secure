@@ -114,11 +114,9 @@ jobs:
         run: gradle testDebugUnitTest --no-daemon --stacktrace
 
       - name: Build debug APK
-        working-directory: upstream
         run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Verify APK signature and record SHA-256
-        working-directory: upstream
         run: |
           set -euo pipefail
           APK=app/build/outputs/apk/debug/app-debug.apk
@@ -127,7 +125,6 @@ jobs:
           sha256sum "$APK" | tee SHA256SUMS.txt
 
       - name: Malware scan APK and native payload (ClamAV)
-        working-directory: upstream
         run: |
           set -euo pipefail
           sudo apt-get update
