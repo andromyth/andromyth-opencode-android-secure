@@ -6,6 +6,7 @@ import java.util.Base64;
 import java.util.Map;
 
 /** Per-process HTTP Basic authentication for the app-private loopback server. */
+// Source is vendored from upstream v0.52.0-p52; see the private repository README.
 public final class ServerAuth {
     private static final String USERNAME = "opencode";
     private static final SecureRandom RANDOM = new SecureRandom();
