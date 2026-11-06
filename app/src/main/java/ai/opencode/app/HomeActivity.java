@@ -599,8 +599,7 @@ public class HomeActivity extends Activity implements ServerService.Evt {
 
     private void pickFolder() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
-                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try { startActivityForResult(intent, REQ_SAF_TREE); }
         catch (Exception e) {
             Toast.makeText(this, "Folder picker unavailable", Toast.LENGTH_SHORT).show();
@@ -613,13 +612,6 @@ public class HomeActivity extends Activity implements ServerService.Evt {
         if (requestCode != REQ_SAF_TREE || resultCode != RESULT_OK || data == null
                 || data.getData() == null) return;
         Uri tree = data.getData();
-        try {
-            getContentResolver().takePersistableUriPermission(tree,
-                    data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        } catch (Exception e) {
-            Toast.makeText(this, "Could not retain folder access", Toast.LENGTH_LONG).show();
-            return;
-        }
         Toast.makeText(this, "Importing selected folder into private storage…",
                 Toast.LENGTH_LONG).show();
         ex.execute(() -> {
