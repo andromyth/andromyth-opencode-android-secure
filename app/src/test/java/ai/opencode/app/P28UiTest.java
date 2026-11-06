@@ -179,7 +179,7 @@ public class P28UiTest {
 
         assertTrue("copy button owns ACTION_DOWN before TextView selection", downConsumed);
         assertTrue("copy button consumes ACTION_UP", upConsumed);
-        assertEquals("echo hello", copied.get());
+        assertEquals("echo hello\n", copied.get());
     }
 
     // -------------------------------------------------------- typing slot
