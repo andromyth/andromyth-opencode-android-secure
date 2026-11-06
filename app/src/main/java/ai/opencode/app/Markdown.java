@@ -76,6 +76,11 @@ public final class Markdown {
 
     public interface CodeBlockCopyListener { void copy(String code); }
 
+    private static final class CodeCopySpan extends ClickableSpan {
+        CodeCopySpan(String code, CodeBlockCopyListener listener) {}
+        @Override public void onClick(View widget) {}
+    }
+
     public static CharSequence render(String src, MentionResolver mr) {
         return render(src, mr, null);
     }
@@ -155,7 +160,7 @@ public final class Markdown {
             int actionStart = b.length();
             b.append("⧉  Copy code");
             int actionEnd = b.length();
-            b.setSpan(new ClickableSpan() {
+            b.setSpan(new CodeCopySpan(code, copyListener) {
                 @Override public void onClick(View widget) {
                     copyListener.copy(code);
                 }
@@ -274,22 +279,60 @@ public final class Markdown {
         final int slop = ViewConfiguration.get(tv.getContext())
                 .getScaledTouchSlop();
         final float[] down = new float[2];
+        final CodeCopySpan[] copyTarget = new CodeCopySpan[1];
         tv.setOnTouchListener((v, ev) -> {
             switch (ev.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
+                case MotionEvent.ACTION_DOWN: {
                     down[0] = ev.getX();
                     down[1] = ev.getY();
+                    ClickableSpan hit = spanAt(tv, ev.getX(), ev.getY());
+                    if (hit instanceof CodeCopySpan) {
+                        // Own the complete copy-button gesture from DOWN.
+                        // Otherwise TextView selection/long-press can win
+                        // and invoke the whole-response copy handler.
+                        copyTarget[0] = (CodeCopySpan) hit;
+                        return true;
+                    }
+                    return false;
+                }
+                case MotionEvent.ACTION_MOVE:
+                    if (copyTarget[0] != null) {
+                        float mx = ev.getX() - down[0];
+                        float my = ev.getY() - down[1];
+                        if (mx * mx + my * my > (float) slop * slop * 4)
+                            copyTarget[0] = null;
+                        return true;
+                    }
                     return false;
                 case MotionEvent.ACTION_UP: {
+                    if (copyTarget[0] != null) {
+                        float dx = ev.getX() - down[0];
+                        float dy = ev.getY() - down[1];
+                        CodeCopySpan target = copyTarget[0];
+                        copyTarget[0] = null;
+                        if (dx * dx + dy * dy <= (float) slop * slop * 4)
+                            target.onClick(tv);
+                        return true;
+                    }
                     float dx = ev.getX() - down[0];
                     float dy = ev.getY() - down[1];
-                    if (dx * dx + dy * dy > (float) slop * slop * 4) {
-                        return false;               // a drag, not a tap
+                    if (dx * dx + dy * dy > (float) slop * slop * 4)
+                        return false;
+                    ClickableSpan hit = spanAt(tv, ev.getX(), ev.getY());
+                    if (hit != null) {
+                        hit.onClick(tv);
+                        return true;
                     }
-                    return fireSpanAt(tv, ev.getX(), ev.getY());
-                }
-                default:
                     return false;
+                }
+                case MotionEvent.ACTION_CANCEL:
+                    if (copyTarget[0] != null) {
+                        copyTarget[0] = null;
+                        return true;
+                    }
+                    return false;
+                default:
+                    return copyTarget[0] != null;
             }
         });
     }
@@ -297,28 +340,24 @@ public final class Markdown {
     /** Hit-test one point against the ClickableSpans of a laid-out
      *  TextView; fires the innermost span and reports the event consumed.
      *  Never throws — a broken layout must not break the row. */
-    private static boolean fireSpanAt(TextView tv, float ex, float ey) {
+    private static ClickableSpan spanAt(TextView tv, float ex, float ey) {
         try {
             CharSequence cs = tv.getText();
-            if (!(cs instanceof Spanned)) return false;
+            if (!(cs instanceof Spanned)) return null;
             Layout L = tv.getLayout();
-            if (L == null) return false;            // not laid out yet
+            if (L == null) return null;
             int x = (int) (ex - tv.getTotalPaddingLeft() + tv.getScrollX());
             int y = (int) (ey - tv.getTotalPaddingTop() + tv.getScrollY());
-            if (x < 0 || y < 0) return false;
+            if (x < 0 || y < 0) return null;
             int line = L.getLineForVertical(y);
-            if (line < 0 || line >= L.getLineCount()) return false;
+            if (line < 0 || line >= L.getLineCount()) return null;
             if (x < L.getLineLeft(line) - slopPad()
-                    || x > L.getLineRight(line) + slopPad()) {
-                return false;                       // beside the text block
-            }
+                    || x > L.getLineRight(line) + slopPad()) return null;
             int off = L.getOffsetForHorizontal(line, x);
             ClickableSpan[] spans = spanNear((Spanned) cs, L, off);
-            if (spans.length == 0) return false;
-            spans[spans.length - 1].onClick(tv);
-            return true;
+            return spans.length == 0 ? null : spans[spans.length - 1];
         } catch (Throwable t) {
-            return false;                           // a tap must never crash
+            return null;
         }
     }
 
