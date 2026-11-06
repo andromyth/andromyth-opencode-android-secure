@@ -16,6 +16,7 @@ import android.view.View;
 import android.view.ViewConfiguration;
 import android.widget.TextView;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -74,18 +75,7 @@ public final class Markdown {
         return render(src, null);
     }
 
-    public interface CodeBlockCopyListener { void copy(String code); }
-
-    private static class CodeCopySpan extends ClickableSpan {
-        @Override public void onClick(View widget) {}
-    }
-
     public static CharSequence render(String src, MentionResolver mr) {
-        return render(src, mr, null);
-    }
-
-    public static CharSequence render(String src, MentionResolver mr,
-                                      CodeBlockCopyListener codeCopy) {
         if (src == null || src.isEmpty()) return "";
         if (src.length() > 30000) return src; // fast path for huge outputs
 
@@ -106,7 +96,7 @@ public final class Markdown {
                     code.append(lines[i]).append('\n');
                     i++;
                 }
-                appendCodeBlock(b, code.toString(), codeCopy);
+                appendCodeBlock(b, code.toString());
                 continue;
             }
 
@@ -139,6 +129,24 @@ public final class Markdown {
         return b;
     }
 
+    /** Exact contents of every fenced block, each kept separate and newline-preserving. */
+    public static List<String> codeBlocks(String src) {
+        List<String> out = new ArrayList<>();
+        if (src == null || src.isEmpty()) return out;
+        String[] lines = src.split("\\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            if (!lines[i].trim().startsWith("```")) continue;
+            StringBuilder code = new StringBuilder();
+            i++;
+            while (i < lines.length && !lines[i].trim().startsWith("```")) {
+                code.append(lines[i]).append('\\n');
+                i++;
+            }
+            out.add(code.toString());
+        }
+        return out;
+    }
+
     private static int headerLevel(String line) {
         int n = 0;
         while (n < line.length() && n < 6 && line.charAt(n) == '#') n++;
@@ -146,31 +154,13 @@ public final class Markdown {
         return 0;
     }
 
-    private static void appendCodeBlock(SpannableStringBuilder b, String code,
-                                        CodeBlockCopyListener copyListener) {
+    private static void appendCodeBlock(SpannableStringBuilder b, String code) {
         int s = b.length();
         b.append(code);
         int e = b.length();
         b.setSpan(new TypefaceSpan("monospace"), s, e, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         b.setSpan(new BackgroundColorSpan(CODE_BG), s, e, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         b.setSpan(new ForegroundColorSpan(CODE_FG), s, e, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        if (copyListener != null) {
-            b.append("\n");
-            int actionStart = b.length();
-            b.append("⧉  Copy code");
-            int actionEnd = b.length();
-            b.setSpan(new CodeCopySpan() {
-                @Override public void onClick(View widget) {
-                    copyListener.copy(code);
-                }
-                @Override public void updateDrawState(TextPaint paint) {
-                    paint.setColor(ACCENT_LINK);
-                    paint.setUnderlineText(false);
-                    paint.setFakeBoldText(true);
-                }
-            }, actionStart, actionEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            b.append("\n");
-        }
     }
 
     private static void appendInline(SpannableStringBuilder b, String line,
@@ -278,45 +268,13 @@ public final class Markdown {
         final int slop = ViewConfiguration.get(tv.getContext())
                 .getScaledTouchSlop();
         final float[] down = new float[2];
-        final CodeCopySpan[] copyTarget = new CodeCopySpan[1];
-        final boolean[] copyGesture = new boolean[1];
         tv.setOnTouchListener((v, ev) -> {
             switch (ev.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN: {
+                case MotionEvent.ACTION_DOWN:
                     down[0] = ev.getX();
                     down[1] = ev.getY();
-                    ClickableSpan hit = spanAt(tv, ev.getX(), ev.getY());
-                    if (hit instanceof CodeCopySpan) {
-                        // Own the complete copy-button gesture from DOWN.
-                        // Otherwise TextView selection/long-press can win
-                        // and invoke the whole-response copy handler.
-                        copyTarget[0] = (CodeCopySpan) hit;
-                        copyGesture[0] = true;
-                        return true;
-                    }
-                    return false;
-                }
-                case MotionEvent.ACTION_MOVE:
-                    if (copyGesture[0]) {
-                        float mx = ev.getX() - down[0];
-                        float my = ev.getY() - down[1];
-                        if (mx * mx + my * my > (float) slop * slop * 4)
-                            copyTarget[0] = null;
-                        return true;
-                    }
                     return false;
                 case MotionEvent.ACTION_UP: {
-                    if (copyGesture[0]) {
-                        float dx = ev.getX() - down[0];
-                        float dy = ev.getY() - down[1];
-                        CodeCopySpan target = copyTarget[0];
-                        copyTarget[0] = null;
-                        copyGesture[0] = false;
-                        if (target != null
-                                && dx * dx + dy * dy <= (float) slop * slop * 4)
-                            target.onClick(tv);
-                        return true;
-                    }
                     float dx = ev.getX() - down[0];
                     float dy = ev.getY() - down[1];
                     if (dx * dx + dy * dy > (float) slop * slop * 4)
@@ -328,15 +286,8 @@ public final class Markdown {
                     }
                     return false;
                 }
-                case MotionEvent.ACTION_CANCEL:
-                    if (copyGesture[0]) {
-                        copyTarget[0] = null;
-                        copyGesture[0] = false;
-                        return true;
-                    }
-                    return false;
                 default:
-                    return copyGesture[0];
+                    return false;
             }
         });
     }
