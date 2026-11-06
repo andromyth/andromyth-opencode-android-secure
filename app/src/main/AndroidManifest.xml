@@ -24,10 +24,6 @@
          and relaunch the sandbox after reboot (opt-in switch). -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
-    <!-- legacy storage: agent file tools can reach /sdcard; chat export
-         writes to Downloads (Termux pattern — targetSdk 28). -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
     <!-- P52: install an APK the agent produced / the user found in Files. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
 
@@ -40,7 +36,7 @@
         android:theme="@style/AppTheme"
         android:allowBackup="false"
         android:resizeableActivity="true"
-        android:requestLegacyExternalStorage="true">
+        >
 
         <!-- P16 DeX: every activity handles its own configuration changes
              (window resize, free-form/DeX, split-screen, keyboard) so a
