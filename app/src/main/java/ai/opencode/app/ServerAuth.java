@@ -1,6 +1,8 @@
 // CI rebuild trigger: workflow working-directory correction.
 package ai.opencode.app;
 
+// Rebuild trigger: ClamAV updater service-lock fix.
+
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Base64;
