@@ -1,3 +1,4 @@
+// CI rebuild trigger: workflow working-directory correction.
 package ai.opencode.app;
 
 import java.nio.charset.StandardCharsets;
