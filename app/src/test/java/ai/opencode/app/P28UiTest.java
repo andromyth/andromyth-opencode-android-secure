@@ -154,7 +154,7 @@ public class P28UiTest {
         TextView tv = new TextView(c);
         tv.setTextIsSelectable(true);
         CharSequence rendered = Markdown.render(
-                "Before\\n\\n\\`\\`\\`sh\\necho hello\\n\\`\\`\\`\\nAfter",
+                "Before\n\n```sh\necho hello\n```\nAfter",
                 null, copied::set);
         tv.setText(rendered);
         Markdown.enableSpanTaps(tv);
