@@ -58,4 +58,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "[vendored-source] Import pinned OpenCode Android source with hardening"
+          git pull --rebase origin main
           git push origin HEAD:main
