@@ -4828,26 +4828,9 @@ public class ChatActivity extends Activity
         Toast.makeText(this, "copied " + last.length() + " chars", Toast.LENGTH_SHORT).show();
     }
 
-    private static final int REQ_EXPORT = 41;
-    private boolean exportPending;
-
     private void exportChat() {
-        if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            exportPending = true;
-            requestPermissions(new String[]{
-                    android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                    android.Manifest.permission.READ_EXTERNAL_STORAGE}, REQ_EXPORT);
-            return;
-        }
+        // App-specific external files directory: no shared-storage permission.
         doExport();
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
-        if (code == REQ_EXPORT) {
-            if (exportPending) { exportPending = false; doExport(); }
-        }
     }
 
     private void doExport() {
@@ -4887,10 +4870,9 @@ public class ChatActivity extends Activity
             String out;
             String where;
             try {
-                File dir = android.os.Environment
-                        .getExternalStoragePublicDirectory(
-                                android.os.Environment.DIRECTORY_DOWNLOADS);
-                if (!dir.exists()) dir.mkdirs();
+                File dir = getExternalFilesDir(android.os.Environment.DIRECTORY_DOCUMENTS);
+                if (dir == null) throw new java.io.IOException("App document directory unavailable");
+                if (!dir.exists() && !dir.mkdirs()) throw new java.io.IOException("Cannot create export directory");
                 String ts = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
                         .format(new Date());
                 File f = new File(dir, "opencode-chat-" + ts + ".txt");
