@@ -152,8 +152,8 @@ public class P28UiTest {
                      Robolectric.buildActivity(ChatActivity.class)) {
             ChatActivity activity = ctl.setup().get();
             LinearLayout host = new LinearLayout(activity);
-            String answer = "Before\\n\\n```sh\\necho first\\n```\\nAfter\\n\\n"
-                    + "```python\\nprint(2)\\n```";
+            String answer = "Before\n\n```sh\necho first\n```\nAfter\n\n"
+                    + "```python\nprint(2)\n```";
             activity.addCodeCopyButtons(host, answer);
 
             assertEquals("one real view per fenced block", 2, host.getChildCount());
@@ -162,7 +162,7 @@ public class P28UiTest {
             android.content.ClipboardManager clipboard =
                     (android.content.ClipboardManager) activity.getSystemService(
                             android.content.Context.CLIPBOARD_SERVICE);
-            assertEquals("print(2)\\n", clipboard.getPrimaryClip()
+            assertEquals("print(2)\n", clipboard.getPrimaryClip()
                     .getItemAt(0).coerceToText(activity).toString());
         }
     }
