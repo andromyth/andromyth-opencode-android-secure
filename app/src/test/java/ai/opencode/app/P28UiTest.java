@@ -147,39 +147,24 @@ public class P28UiTest {
     }
 
     @Test
-    public void codeCopyTap_isCapturedAndCopiesOnlyFenceContents() {
-        android.content.Context c = org.robolectric.RuntimeEnvironment
-                .getApplication();
-        AtomicReference<String> copied = new AtomicReference<>(null);
-        TextView tv = new TextView(c);
-        tv.setTextIsSelectable(true);
-        CharSequence rendered = Markdown.render(
-                "Before\n\n```sh\necho hello\n```\nAfter",
-                null, copied::set);
-        tv.setText(rendered);
-        Markdown.enableSpanTaps(tv);
-        tv.measure(View.MeasureSpec.makeMeasureSpec(480, View.MeasureSpec.EXACTLY),
-                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-        tv.layout(0, 0, 480, tv.getMeasuredHeight());
+    public void nativeCodeCopyButtons_copyOnlyTheSelectedFence() {
+        try (ActivityController<ChatActivity> ctl =
+                     Robolectric.buildActivity(ChatActivity.class)) {
+            ChatActivity activity = ctl.setup().get();
+            LinearLayout host = new LinearLayout(activity);
+            String answer = "Before\\n\\n```sh\\necho first\\n```\\nAfter\\n\\n"
+                    + "```python\\nprint(2)\\n```";
+            activity.addCodeCopyButtons(host, answer);
 
-        Spanned sp = (Spanned) rendered;
-        ClickableSpan[] spans = sp.getSpans(0, sp.length(), ClickableSpan.class);
-        assertEquals("one independent copy action", 1, spans.length);
-        int start = sp.getSpanStart(spans[0]);
-        android.text.Layout layout = tv.getLayout();
-        int line = layout.getLineForOffset(start);
-        float x = (layout.getPrimaryHorizontal(start)
-                + layout.getPrimaryHorizontal(sp.getSpanEnd(spans[0]) - 1)) / 2f;
-        float y = (layout.getLineTop(line) + layout.getLineBottom(line)) / 2f;
-        long now = android.os.SystemClock.uptimeMillis();
-        boolean downConsumed = tv.dispatchTouchEvent(MotionEvent.obtain(now, now,
-                MotionEvent.ACTION_DOWN, x, y, 0));
-        boolean upConsumed = tv.dispatchTouchEvent(MotionEvent.obtain(now, now + 60,
-                MotionEvent.ACTION_UP, x, y, 0));
+            assertEquals("one real view per fenced block", 2, host.getChildCount());
+            host.getChildAt(1).performClick();
 
-        assertTrue("copy button owns ACTION_DOWN before TextView selection", downConsumed);
-        assertTrue("copy button consumes ACTION_UP", upConsumed);
-        assertEquals("echo hello\n", copied.get());
+            android.content.ClipboardManager clipboard =
+                    (android.content.ClipboardManager) activity.getSystemService(
+                            android.content.Context.CLIPBOARD_SERVICE);
+            assertEquals("print(2)\\n", clipboard.getPrimaryClip()
+                    .getItemAt(0).coerceToText(activity).toString());
+        }
     }
 
     // -------------------------------------------------------- typing slot
