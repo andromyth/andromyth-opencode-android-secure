@@ -3,6 +3,14 @@ name: Secure Android APK build and scan
 on:
   push:
     branches: [main]
+    paths:
+      - "app/**"
+      - "gradle/**"
+      - "build.gradle"
+      - "settings.gradle"
+      - "gradle.properties"
+      - "gradlew"
+      - ".gitignore"
   workflow_dispatch:
 
 permissions:
@@ -39,15 +47,15 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
           "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0" "platform-tools"
 
-      - name: Fetch pinned upstream source and apply hardening
+      - name: Validate vendored hardened source
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch v0.52.0-p52 https://github.com/turanmertkaraca-bit/opencode-android.git upstream
-          test "$(git -C upstream describe --tags --exact-match)" = "v0.52.0-p52"
-          cp scripts/apply_security_hardening.py upstream/apply_security_hardening.py
-          cd upstream
-          python3 apply_security_hardening.py
-          rm apply_security_hardening.py
+          test -f settings.gradle
+          test -f app/build.gradle
+          test -f app/src/main/java/ai/opencode/app/ServerAuth.java
+          test -f app/src/main/java/ai/opencode/app/Api.java
+          test -f app/src/main/java/ai/opencode/app/ServerService.java
+          test ! -e keystore/debug.keystore
           git diff --check
 
       - name: Prepare APK signing key
@@ -89,22 +97,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p upstream/app/src/main/assets
-          gh release download --repo turanmertkaraca-bit/opencode-android \
-            --tag v0.52.0-p52 \
+          mkdir -p app/src/main/assets
+          gh release download v0.52.0-p52 --repo turanmertkaraca-bit/opencode-android \
             --pattern 'opencode-p52-v0.52.0-debug.apk' \
-            --output upstream/upstream-release.apk
-          echo "742fd845f589500d6279faaed38d2b9419bfa365c24ad70a8135f266275ca748  upstream/upstream-release.apk" | sha256sum -c -
-          unzip -l upstream/upstream-release.apk | grep -F 'assets/oc_pkg.bin'
-          unzip -p upstream/upstream-release.apk assets/oc_pkg.bin > upstream/app/src/main/assets/oc_pkg.bin
-          test -s upstream/app/src/main/assets/oc_pkg.bin
-          test "$(od -An -tx1 -N2 upstream/app/src/main/assets/oc_pkg.bin | tr -d ' \\n')" = "1f8b"
-          sha256sum upstream/app/src/main/assets/oc_pkg.bin | tee upstream/native-payload-SHA256SUMS.txt
-          ls -lh upstream/app/src/main/assets/oc_pkg.bin
-          rm upstream/upstream-release.apk
+            --output upstream-release.apk
+          echo "742fd845f589500d6279faaed38d2b9419bfa365c24ad70a8135f266275ca748  upstream-release.apk" | sha256sum -c -
+          unzip -l upstream-release.apk | grep -F 'assets/oc_pkg.bin'
+          unzip -p upstream-release.apk assets/oc_pkg.bin > app/src/main/assets/oc_pkg.bin
+          test -s app/src/main/assets/oc_pkg.bin
+          test "$(od -An -tx1 -N2 app/src/main/assets/oc_pkg.bin | tr -d ' \\n')" = "1f8b"
+          sha256sum app/src/main/assets/oc_pkg.bin | tee native-payload-SHA256SUMS.txt
+          ls -lh app/src/main/assets/oc_pkg.bin
+          rm upstream-release.apk
 
       - name: Run JVM tests
-        working-directory: upstream
         run: gradle testDebugUnitTest --no-daemon --stacktrace
 
       - name: Build debug APK
@@ -137,9 +143,9 @@ jobs:
         with:
           name: opencode-android-secure-build
           path: |
-            upstream/app/build/outputs/apk/debug/app-debug.apk
-            upstream/SHA256SUMS.txt
-            upstream/signing-certificate.txt
-            upstream/clamav-scan.txt
-            upstream/app/build/reports/tests/testDebugUnitTest
+            app/build/outputs/apk/debug/app-debug.apk
+            SHA256SUMS.txt
+            signing-certificate.txt
+            clamav-scan.txt
+            app/build/reports/tests/testDebugUnitTest
           if-no-files-found: warn
