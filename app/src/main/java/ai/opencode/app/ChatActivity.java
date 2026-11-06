@@ -2906,12 +2906,12 @@ public class ChatActivity extends Activity
                             // append the remainder as plain text instead of
                             // dropping all formatting.
                             SpannableStringBuilder sb = new SpannableStringBuilder(
-                                    Markdown.render(full.substring(0, 30000), mres));
+                                    Markdown.render(full.substring(0, 30000), mres, code -> self.copyText(code, "code block")));
                             sb.append("\n…\n");
                             sb.append(full, 30000, full.length());
                             md = sb;
                         } else {
-                            md = Markdown.render(full, mres);
+                            md = Markdown.render(full, mres, code -> self.copyText(code, "code block"));
                         }
                     }
                     catch (Exception e) { md = NoteStrip.trimTail(r.text.toString()); }
