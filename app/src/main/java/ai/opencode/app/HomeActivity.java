@@ -3,7 +3,7 @@ package ai.opencode.app;
 import android.animation.ObjectAnimator;
 import android.app.Activity;
 import android.content.Intent;
-import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.text.Editable;
@@ -41,7 +41,7 @@ import java.util.concurrent.Executors;
  */
 public class HomeActivity extends Activity implements ServerService.Evt {
 
-    private static final int REQ_STORAGE = 61;
+    private static final int REQ_SAF_TREE = 62;
 
     private DeckView deck;
     private LinearLayout dots;
@@ -62,19 +62,7 @@ public class HomeActivity extends Activity implements ServerService.Evt {
         buildUi();
         ServerService.subscribe(this);
 
-        if (checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE)
-                != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{
-                    android.Manifest.permission.READ_EXTERNAL_STORAGE,
-                    android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQ_STORAGE);
-        } else {
-            init();
-        }
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int code, String[] p, int[] r) {
-        if (code == REQ_STORAGE) init(); // seed falls back to private storage
+        init(); // private workspace; external folders are granted individually through SAF
     }
 
     private void init() {
@@ -610,15 +598,48 @@ public class HomeActivity extends Activity implements ServerService.Evt {
     }
 
     private void pickFolder() {
-        DirDialog dlg = new DirDialog();
-        dlg.show(this, pickBase(), path -> {
-            Projects.P p = Projects.add(this, path);
-            buildDeck();
-            // land the deck on the new card
-            int idx = cur.size();
-            for (int i = 0; i < cur.size(); i++) if (cur.get(i).id.equals(p.id)) idx = i;
-            final int page = idx;
-            deck.post(() -> { deck.setCurrent(page, true); syncDots(page); });
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        try { startActivityForResult(intent, REQ_SAF_TREE); }
+        catch (Exception e) {
+            Toast.makeText(this, "Folder picker unavailable", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_SAF_TREE || resultCode != RESULT_OK || data == null
+                || data.getData() == null) return;
+        Uri tree = data.getData();
+        try {
+            getContentResolver().takePersistableUriPermission(tree,
+                    data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } catch (Exception e) {
+            Toast.makeText(this, "Could not retain folder access", Toast.LENGTH_LONG).show();
+            return;
+        }
+        Toast.makeText(this, "Importing selected folder into private storage…",
+                Toast.LENGTH_LONG).show();
+        ex.execute(() -> {
+            try {
+                File imported = SafWorkspace.importTree(this, tree);
+                ui.post(() -> {
+                    Projects.P p = Projects.add(this, imported.getAbsolutePath());
+                    buildDeck();
+                    int idx = 0;
+                    for (int i = 0; i < cur.size(); i++)
+                        if (cur.get(i).id.equals(p.id)) idx = i;
+                    final int page = idx;
+                    deck.post(() -> { deck.setCurrent(page, true); syncDots(page); });
+                    Toast.makeText(this, "Private workspace ready: " + p.name,
+                            Toast.LENGTH_LONG).show();
+                });
+            } catch (Exception e) {
+                ui.post(() -> Toast.makeText(this, "Folder import failed: "
+                        + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
         });
     }
 
