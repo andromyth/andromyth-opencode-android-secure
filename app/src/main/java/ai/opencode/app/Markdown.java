@@ -77,7 +77,6 @@ public final class Markdown {
     public interface CodeBlockCopyListener { void copy(String code); }
 
     private static final class CodeCopySpan extends ClickableSpan {
-        CodeCopySpan(String code, CodeBlockCopyListener listener) {}
         @Override public void onClick(View widget) {}
     }
 
@@ -160,7 +159,7 @@ public final class Markdown {
             int actionStart = b.length();
             b.append("⧉  Copy code");
             int actionEnd = b.length();
-            b.setSpan(new CodeCopySpan(code, copyListener) {
+            b.setSpan(new CodeCopySpan() {
                 @Override public void onClick(View widget) {
                     copyListener.copy(code);
                 }
@@ -280,6 +279,7 @@ public final class Markdown {
                 .getScaledTouchSlop();
         final float[] down = new float[2];
         final CodeCopySpan[] copyTarget = new CodeCopySpan[1];
+        final boolean[] copyGesture = new boolean[1];
         tv.setOnTouchListener((v, ev) -> {
             switch (ev.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN: {
@@ -291,12 +291,13 @@ public final class Markdown {
                         // Otherwise TextView selection/long-press can win
                         // and invoke the whole-response copy handler.
                         copyTarget[0] = (CodeCopySpan) hit;
+                        copyGesture[0] = true;
                         return true;
                     }
                     return false;
                 }
                 case MotionEvent.ACTION_MOVE:
-                    if (copyTarget[0] != null) {
+                    if (copyGesture[0]) {
                         float mx = ev.getX() - down[0];
                         float my = ev.getY() - down[1];
                         if (mx * mx + my * my > (float) slop * slop * 4)
@@ -305,12 +306,14 @@ public final class Markdown {
                     }
                     return false;
                 case MotionEvent.ACTION_UP: {
-                    if (copyTarget[0] != null) {
+                    if (copyGesture[0]) {
                         float dx = ev.getX() - down[0];
                         float dy = ev.getY() - down[1];
                         CodeCopySpan target = copyTarget[0];
                         copyTarget[0] = null;
-                        if (dx * dx + dy * dy <= (float) slop * slop * 4)
+                        copyGesture[0] = false;
+                        if (target != null
+                                && dx * dx + dy * dy <= (float) slop * slop * 4)
                             target.onClick(tv);
                         return true;
                     }
@@ -326,13 +329,14 @@ public final class Markdown {
                     return false;
                 }
                 case MotionEvent.ACTION_CANCEL:
-                    if (copyTarget[0] != null) {
+                    if (copyGesture[0]) {
                         copyTarget[0] = null;
+                        copyGesture[0] = false;
                         return true;
                     }
                     return false;
                 default:
-                    return copyTarget[0] != null;
+                    return copyGesture[0];
             }
         });
     }
