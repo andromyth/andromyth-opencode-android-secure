@@ -189,7 +189,7 @@ public final class Debian {
         } else {
             s.append("sandbox: Lite shell (Debian ")
              .append(extracted(c) ? "probe failed" : "not installed").append(")\n")
-             .append("packages: Alpine apk via pkg (read-only works; install/update may be blocked by Android seccomp)\\n")
+             .append("packages: Alpine apk via pkg (read-only works; install/update may be blocked by Android seccomp)\n")
              .append("host   : Android \u2014 /system/bin/sh\n")
              .append("tip    : Settings \u2192 Sandbox \u2192 Install Debian for apt + git");
         }
