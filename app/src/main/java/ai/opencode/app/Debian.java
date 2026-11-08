@@ -106,6 +106,12 @@ public final class Debian {
         return new File(dir(c), ".probe").exists();
     }
 
+    /** apt bootstrap completed and git is present in the guest. */
+    public static boolean aptReady(Context c) {
+        return new File(dir(c), ".apt-ready").isFile()
+                && new File(rootfsDir(c), "usr/bin/git").isFile();
+    }
+
     /** Debian shells active = extracted + probe passed + user switch on. */
     public static boolean active(Context c) {
         return extracted(c) && probeOk(c)
@@ -121,9 +127,10 @@ public final class Debian {
             return "installed · proot probe failed — Lite shell active"
                     + (rep ? " · report saved (Sandbox doctor)" : "");
         }
+        if (!aptReady(c)) return "Debian installed · apt/git bootstrap incomplete";
         return c.getSharedPreferences("oc", Context.MODE_PRIVATE)
                 .getBoolean("debian_shell", true)
-                ? "active · Debian 12 + apt" : "installed · switched off";
+                ? "active · Debian 12 + apt + git" : "installed · switched off";
     }
 
     public static long sizeOf(Context c) {
@@ -220,56 +227,54 @@ public final class Debian {
      * Idempotent: skips whatever is already done.
      */
     public static synchronized boolean install(Context c, Progress cb) {
-        ensureDirs(c);                          // P15: tmp dirs BEFORE anything
-        if (extracted(c)) { probe(c, cb); return probeOk(c); }
+        ensureDirs(c);
         if (installing) return false;
         installing = true;
         try {
-            say(cb, "unpacking proot toolkit…");
+            // Always restore the executable toolchain first. Older/partial
+            // installs can have .extracted without files/debian/bin/proot.
+            say(cb, "repairing proot toolkit…");
             unpackBinaries(c);
 
-            File blob = new File(c.getCacheDir(), "debian-rootfs.tar.gz");
-            if (!blob.exists() || blob.length() < 30_000_000) {
-                say(cb, "resolving debian:bookworm arm64 image…");
-                String digest = resolveLayer(c);
-                say(cb, "downloading Debian 12 rootfs (~48 MB)…");
-                downloadBlob(c, digest, blob);
+            if (!extracted(c)) {
+                File blob = new File(c.getCacheDir(), "debian-rootfs.tar.gz");
+                if (!blob.exists() || blob.length() < 30_000_000) {
+                    say(cb, "resolving debian:bookworm arm64 image…");
+                    String digest = resolveLayer(c);
+                    say(cb, "downloading Debian 12 rootfs (~48 MB)…");
+                    downloadBlob(c, digest, blob);
+                }
+                say(cb, "extracting Debian rootfs (~150 MB, one-time)…");
+                extract(c, blob, cb);
+                blob.delete();
+
+                say(cb, "configuring apt + DNS bridge…");
+                configure(c);
+                try {
+                    curate(c, cb);
+                } catch (Throwable t) {
+                    Trail.record(c, "rootfs curate", t);
+                }
+                writeMarker(new File(dir(c), ".extracted"), "ok\n");
+            } else {
+                ensureDirs(c);
             }
-            say(cb, "extracting rootfs (~150 MB, one-time)…");
-            extract(c, blob, cb);
-            blob.delete();
-
-            say(cb, "configuring apt + DNS bridge…");
-            configure(c);
-
-            // P27 phase 2: the CURATED rootfs — doc/man/zoneinfo/perl/locale
-            // trim (~50+ MB off the stock layer), logged, Settings-gated.
-            try {
-                curate(c, cb);
-            } catch (Throwable t) {
-                Trail.record(c, "rootfs curate", t);   // a trim can never kill the install
-            }
-
-            // marker BEFORE the probe so a probe crash doesn't re-extract
-            writeMarker(new File(dir(c), ".extracted"), "ok\n");
 
             say(cb, "probing proot on this device…");
-            boolean ok = probe(c, cb);
-            if (!ok) {
-                say(cb, "proot not supported here — Lite shell stays active");
+            if (!probe(c, cb)) {
+                say(cb, "proot probe failed — Lite shell remains active");
                 return false;
             }
 
-            say(cb, "installing git + certificates (apt)…");
-            aptBootstrap(c, cb);
+            if (!aptReady(c)) {
+                say(cb, "bootstrapping apt + git…");
+                if (!aptBootstrap(c, cb)) return false;
+            }
 
-            say(cb, "cloning opencode-android for analysis…");
-            cloneRepo(c);
-
-            say(cb, "Debian ready — ask the agent to run `apt install …`");
+            say(cb, "Debian ready — apt and git verified");
             return true;
         } catch (Exception e) {
-            say(cb, "install failed: " + e);
+            say(cb, "Debian install failed: " + e);
             return false;
         } finally {
             installing = false;
@@ -920,14 +925,46 @@ public final class Debian {
         }
     }
 
-    /** apt update + git + ca-certificates (order matters: certs last). */
-    private static void aptBootstrap(Context c, Progress cb) {
+    /** apt update + git + certificates; never mark success on a failed command. */
+    private static boolean aptBootstrap(Context c, Progress cb) {
         StringBuilder out = new StringBuilder();
-        runGuest(c, "apt-get update", out, 300);
-        say(cb, "apt index refreshed (" + out.length() + " bytes)");
+        int updateRc = runGuest(c, "apt-get update", out, 300);
+        if (updateRc != 0) {
+            say(cb, "apt-get update failed (rc=" + updateRc + "): " + tail(out));
+            return false;
+        }
+
         out.setLength(0);
-        runGuest(c, "apt-get install -y --no-install-recommends git ca-certificates", out, 600);
-        say(cb, "git installed");
+        int installRc = runGuest(c,
+                "apt-get install -y --no-install-recommends git ca-certificates",
+                out, 600);
+        if (installRc != 0) {
+            say(cb, "apt install failed (rc=" + installRc + "): " + tail(out));
+            return false;
+        }
+
+        out.setLength(0);
+        int verifyRc = runGuest(c, "git --version && test -s /etc/ssl/certs/ca-certificates.crt",
+                out, 30);
+        if (verifyRc != 0 || !out.toString().contains("git version")) {
+            say(cb, "apt completed but git/CA verification failed (rc="
+                    + verifyRc + "): " + tail(out));
+            return false;
+        }
+
+        try {
+            writeMarker(new File(dir(c), ".apt-ready"), "git + ca-certificates verified\n");
+        } catch (IOException e) {
+            say(cb, "could not save apt-ready marker: " + e);
+            return false;
+        }
+        say(cb, "apt + git verified: " + out.toString().trim());
+        return true;
+    }
+
+    private static String tail(StringBuilder out) {
+        String s = out == null ? "" : out.toString().trim();
+        return s.length() <= 2400 ? s : s.substring(s.length() - 2400);
     }
 
     /** Pre-clone the project repo so "analyse the repo" works instantly. */
