@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "app/**"
+      - ".github/workflows/secure-android-build.yml"
       - "gradle/**"
       - "build.gradle"
       - "settings.gradle"
@@ -110,8 +111,22 @@ jobs:
           ls -lh app/src/main/assets/oc_pkg.bin
           rm upstream-release.apk
 
-      - name: Run JVM tests
-        run: gradle testDebugUnitTest --no-daemon --stacktrace
+      - name: Run JVM tests (retry transient Robolectric downloads)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            echo "JVM test attempt $attempt/3"
+            if gradle testDebugUnitTest --no-daemon --stacktrace; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Test task failed; retrying in $((attempt * 20)) seconds."
+              sleep "$((attempt * 20))"
+            fi
+          done
+          echo "JVM tests failed after 3 attempts."
+          exit 1
 
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon --stacktrace
