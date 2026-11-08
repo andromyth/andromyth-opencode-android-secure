@@ -94,6 +94,23 @@ public class ShimTest {
     }
 
     @Test
+    public void pkgShim_usesSupportedApkFlags_andAcceptsYesAlias() throws Exception {
+        Context c = RuntimeEnvironment.getApplication();
+        Shims.writePkgShim(c);
+        File pkg = new File(Shims.shimsDir(c), "pkg");
+        assertTrue("pkg shim was written", pkg.isFile());
+        String script = read(pkg);
+        assertFalse("apk 2.14.9 does not support --no-scripts",
+                script.contains("--no-scripts"));
+        assertTrue("apk is invoked under the bundled loader",
+                script.contains("\\"$AL/sbin/apk\\" --root \\"$AL\\""));
+        assertTrue("pkg install -y is normalized before apk add",
+                script.contains("if [ \\"$1\\" = -y ] || [ \\"$1\\" = --yes ]; then shift; fi; apk add"));
+        assertTrue("help documents the accepted -y alias",
+                script.contains("pkg install [-y] <pkgs...>"));
+    }
+
+    @Test
     public void jsonNum_parsesNumbersAndStrings() {
         java.util.Map<String, Object> m = new java.util.HashMap<>();
         m.put("a", 0);
