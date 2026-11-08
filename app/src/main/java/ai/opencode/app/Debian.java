@@ -109,7 +109,9 @@ public final class Debian {
     /** apt bootstrap completed and git is present in the guest. */
     public static boolean aptReady(Context c) {
         return new File(dir(c), ".apt-ready").isFile()
-                && new File(rootfsDir(c), "usr/bin/git").isFile();
+                && new File(rootfsDir(c), "usr/bin/git").isFile()
+                && new File(rootfsDir(c),
+                        "etc/ssl/certs/ca-certificates.crt").isFile();
     }
 
     /** Debian shells active = extracted + probe passed + user switch on. */
