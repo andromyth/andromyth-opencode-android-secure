@@ -47,7 +47,7 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
      *  P49 — the consistency release: no ANR on Settings/Diagnostics (the
      *  size walks left the main thread), the keyboard re-anchor, the
      *  once-and-quiet markdown finalize, bounded log reads. */
-    static final String VERSION_TAG = "0.52.0-p53";
+    static final String VERSION_TAG = "0.52.0-p54";
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private LinearLayout root;
