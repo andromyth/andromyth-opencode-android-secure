@@ -103,7 +103,7 @@ public class ShimTest {
         assertFalse("apk 2.14.9 does not support --no-scripts",
                 script.contains("--no-scripts"));
         assertTrue("apk is invoked under the bundled loader",
-                script.contains("\\"$AL/sbin/apk\\" --root \\"$AL\\""));
+                script.contains("\"$AL/sbin/apk\" --root \"$AL\""));
         assertTrue("pkg install -y is normalized before apk add",
                 script.contains("if [ \"$1\" = -y ] || [ \"$1\" = --yes ]; then shift; fi; apk add"));
         assertTrue("help documents the accepted -y alias",
