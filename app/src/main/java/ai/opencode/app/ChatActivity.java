@@ -3501,6 +3501,7 @@ public class ChatActivity extends Activity
                 RunHub.answerPermission(grantId, "always", (ok, err) -> {
                     if (!ok) {
                         sessionGrantReplies.remove(grantId);
+                        sessionPermissionGrants.remove(grantKey);
                         sys("session permission reply failed · " + err);
                     }
                     checkPermissionQueue();
