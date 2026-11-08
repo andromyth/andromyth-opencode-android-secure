@@ -312,16 +312,16 @@ public final class Shims {
             "BIN=" + files + "/bin\n" +
             "WRAP=" + files + "/wrappers\n" +
             "LB=\"$AL/lib/ld-musl-aarch64.so.1\"\n" +
-            "export PATH=\"$BIN:$WRAP:$PATH\"\n" +
+            "export PATH=/system/bin:/system/xbin:$BIN:$WRAP:$PATH\n" +
             "export HOME=\"$AL/home\" TMPDIR=\"$AL/tmp\"\n" +
-            "mkdir -p \"$HOME\" \"$TMPDIR\" \"$AL/var/cache/apk\" \"$WRAP\" 2>/dev/null\n" +
+            "/system/bin/mkdir -p \"$HOME\" \"$TMPDIR\" \"$AL/var/cache/apk\" \"$WRAP\" 2>/dev/null\n" +
             "[ -r \"$AL/.proxy\" ] && . \"$AL/.proxy\"\n" +
             "export LD_LIBRARY_PATH=\"$AL/lib:$AL/usr/lib\"\n" +
             "if [ ! -x \"$LB\" ]; then\n" +
             "  echo \"pkg: sandbox toolkit not installed yet — Settings > Sandbox > Install toolkit\" >&2\n" +
             "  exit 127\n" +
             "fi\n" +
-            "apk() { \"$LB\" --library-path \"$AL/lib:$AL/usr/lib\" \"$AL/sbin/apk\" --root \"$AL\" \"$@\"; }\n" +
+            "apk() { \"$LB\" --library-path \"$AL/lib:$AL/usr/lib\" \"$AL/sbin/apk\" --root \"$AL\" \"$@\"; rc=$?; if [ $rc -eq 159 ]; then echo \"pkg: apk terminated by Android seccomp (SIGSYS); package write operations are blocked on this device.\" >&2; fi; return $rc; }\n" +
             "usage() {\n" +
             "  echo \"pkg - sandbox package manager (apk front-end)\"\n" +
             "  echo \"  pkg update              refresh package index\"\n" +
@@ -348,14 +348,14 @@ public final class Shims {
             "        printf '[ -r \"$AL/.proxy\" ] && . \"$AL/.proxy\"\\n'\n" +
             "        printf 'exec \"$AL/lib/ld-musl-aarch64.so.1\" --library-path \"$AL/lib:$AL/usr/lib\"'\n" +
             "      } > \"$WRAP/$n.part\"\n" +
-            "      t=$(readlink -f \"$f\" 2>/dev/null); [ -z \"$t\" ] && t=$f\n" +
+            "      t=$(/system/bin/toybox readlink -f \"$f\" 2>/dev/null); [ -z \"$t\" ] && t=$f\n" +
             "      case \"$t\" in\n" +
             "        */bin/busybox)\n" +
             "          printf ' \"$AL/bin/busybox\" \"%s\"' \"$n\" >> \"$WRAP/$n.part\" ;;\n" +
             "        *)\n" +
-            "          case \"$(dd if=\"$t\" bs=2 count=1 2>/dev/null)\" in\n" +
+            "          case \"$(/system/bin/toybox dd if=\"$t\" bs=2 count=1 2>/dev/null)\" in\n" +
             "            '#!')\n" +
-            "              il=$(head -n 1 \"$t\" 2>/dev/null); il=${il##*#!}; il=${il# }; ip=${il%% *}\n" +
+            "              il=$(/system/bin/toybox head -n 1 \"$t\" 2>/dev/null); il=${il##*#!}; il=${il# }; ip=${il%% *}\n" +
             "              case \"$ip\" in\n" +
             "                */python*) printf ' \"$AL/usr/bin/python3\" \"%s\"' \"$t\" >> \"$WRAP/$n.part\" ;;\n" +
             "                */sh|*/ash) printf ' \"$AL/bin/busybox\" sh \"%s\"' \"$t\" >> \"$WRAP/$n.part\" ;;\n" +
@@ -365,7 +365,7 @@ public final class Shims {
             "          esac ;;\n" +
             "      esac\n" +
             "      printf ' \"$@\"\\n' >> \"$WRAP/$n.part\"\n" +
-            "      chmod 755 \"$WRAP/$n.part\" 2>/dev/null && mv \"$WRAP/$n.part\" \"$WRAP/$n\"\n" +
+            "      /system/bin/chmod 755 \"$WRAP/$n.part\" 2>/dev/null && /system/bin/mv \"$WRAP/$n.part\" \"$WRAP/$n\"\n" +
             "      made=$((made+1))\n" +
             "    done\n" +
             "  done\n" +
