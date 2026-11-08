@@ -3660,7 +3660,10 @@ public class ChatActivity extends Activity
             if (ok) {
                 if ("always".equals(response)) {
                     String grantKey = permissionGrantKey(permissionScope);
-                    if (grantKey != null) sessionPermissionGrants.add(grantKey);
+                    if (grantKey != null) {
+                        sessionPermissionGrants.add(grantKey);
+                        sessionGrantReplies.add(id);
+                    }
                 }
                 Toast.makeText(this,
                         "always".equals(response) ? "allowed for session"
