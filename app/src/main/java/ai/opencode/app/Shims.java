@@ -346,11 +346,11 @@ public final class Shims {
             "  echo \"pkg: sandbox toolkit not installed yet — Settings > Sandbox > Install toolkit\" >&2\n" +
             "  exit 127\n" +
             "fi\n" +
-            "apk() { \"$LB\" --library-path \"$AL/lib:$AL/usr/lib\" \"$AL/sbin/apk\" --root \"$AL\" --no-scripts \"$@\"; }\n" +
+            "apk() { \"$LB\" --library-path \"$AL/lib:$AL/usr/lib\" \"$AL/sbin/apk\" --root \"$AL\" \"$@\"; }\n" +
             "usage() {\n" +
             "  echo \"pkg - sandbox package manager (apk front-end)\"\n" +
             "  echo \"  pkg update              refresh package index\"\n" +
-            "  echo \"  pkg install <pkgs...>   install (e.g. pkg install python3 py3-pip git)\"\n" +
+            "  echo \"  pkg install [-y] <pkgs...> install (e.g. pkg install git)\"\n" +
             "  echo \"  pkg remove <pkgs...>    remove\"\n" +
             "  echo \"  pkg search <word>       search the repos\"\n" +
             "  echo \"  pkg list                list installed\"\n" +
@@ -398,7 +398,7 @@ public final class Shims {
             "}\n" +
             "rc=0\n" +
             "case \"$1\" in\n" +
-            "  install|add) shift; apk add \"$@\"; rc=$?; [ $rc -eq 0 ] && rehash ;;\n" +
+            "  install|add) shift; if [ \"$1\" = -y ] || [ \"$1\" = --yes ]; then shift; fi; apk add \"$@\"; rc=$?; [ $rc -eq 0 ] && rehash ;;\n" +
             "  remove|del|uninstall) shift; apk del \"$@\"; rc=$?; [ $rc -eq 0 ] && rehash ;;\n" +
             "  update) shift; apk update; rc=$? ;;\n" +
             "  upgrade) shift; apk upgrade; rc=$? ;;\n" +
