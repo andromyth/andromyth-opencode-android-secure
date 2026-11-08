@@ -105,7 +105,7 @@ public class ShimTest {
         assertTrue("apk is invoked under the bundled loader",
                 script.contains("\\"$AL/sbin/apk\\" --root \\"$AL\\""));
         assertTrue("pkg install -y is normalized before apk add",
-                script.contains("if [ \\"$1\\" = -y ] || [ \\"$1\\" = --yes ]; then shift; fi; apk add"));
+                script.contains("if [ \"$1\" = -y ] || [ \"$1\" = --yes ]; then shift; fi; apk add"));
         assertTrue("help documents the accepted -y alias",
                 script.contains("pkg install [-y] <pkgs...>"));
     }
