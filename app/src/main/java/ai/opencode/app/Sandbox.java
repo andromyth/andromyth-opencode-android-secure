@@ -309,7 +309,9 @@ public final class Sandbox {
             } else {
                 try {
                     String body = new String(java.nio.file.Files.readAllBytes(old.toPath()), "UTF-8");
-                    if (body.contains("/bin/busybox")) old.delete();
+                    if (body.contains("/bin/busybox")
+                            || (old.getName().equals("apk") && body.contains("--no-scripts")))
+                        old.delete();
                 } catch (Exception ignored) {}
             }
         }
