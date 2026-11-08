@@ -113,7 +113,7 @@ public class ShimTest {
         assertTrue("pkg reports apk SIGSYS rather than silently failing",
                 script.contains("Android seccomp (SIGSYS)"));
         assertTrue("pkg keeps a private temp directory",
-                script.contains("TMPDIR=\\"$AL/tmp\\""));
+                script.contains("TMPDIR=\"$AL/tmp\""));
     }
 
     @Test
