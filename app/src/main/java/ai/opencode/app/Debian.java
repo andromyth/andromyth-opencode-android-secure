@@ -991,20 +991,24 @@ public final class Debian {
     }
 
     /** apt update + git + certificates; never mark success on a failed command. */
-    /** Recovery-first bootstrap for minimal Debian rootfs layers. */
+    /** Restore debconf files without asking apt to configure broken packages first. */
     static String aptRecoveryCommand() {
         return "set -e; "
+             + "export DEBIAN_FRONTEND=noninteractive; "
              + "apt-get update; "
-             + "if [ ! -x /usr/sbin/dpkg-preconfigure ] || "
-             + "[ ! -x /usr/share/debconf/frontend ]; then "
-             + "apt-get install -y --no-install-recommends debconf; fi; "
+             + "mkdir -p /tmp/oc-debconf; "
+             + "cd /tmp/oc-debconf; "
+             + "apt-get download debconf; "
+             + "set -- debconf_*.deb; "
+             + "test -f \\"$1\\"; "
+             + "dpkg-deb -x \\"$1\\" /; "
              + "test -x /usr/sbin/dpkg-preconfigure; "
              + "test -x /usr/share/debconf/frontend; "
              + "dpkg --configure -a; "
              + "apt-get install -y --no-install-recommends git ca-certificates; "
              + "git --version; "
              + "test -s /etc/ssl/certs/ca-certificates.crt; "
-             + "test -z \"$(dpkg --audit)\"";
+             + "test -z \\"$(dpkg --audit)\\"";
     }
 
     private static boolean aptBootstrap(Context c, Progress cb) {
@@ -1012,7 +1016,7 @@ public final class Debian {
         StringBuilder out = new StringBuilder();
         int installRc = runGuest(c, aptRecoveryCommand(), out, 900);
         if (installRc != 0) {
-            say(cb, "apt/debconf recovery failed (rc=" + installRc + "): " + tail(out));
+            say(cb, "apt/debconf file recovery failed (rc=" + installRc + "): " + tail(out));
             return false;
         }
         if (!out.toString().contains("git version")) {
