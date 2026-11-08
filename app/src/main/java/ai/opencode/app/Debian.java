@@ -1009,7 +1009,7 @@ public final class Debian {
              + "test -x /usr/bin/perl; "
              + "test -x /usr/sbin/dpkg-preconfigure; "
              + "test -x /usr/share/debconf/frontend; "
-             + "/usr/bin/perl -e 'print qq(perl-ok\\\\n)'; "
+             + "/usr/bin/perl -e 'print qq(perl-ok)'; "
              + "dpkg --configure -a; "
              + "apt-get install -y --no-install-recommends git ca-certificates; "
              + "git --version; "
