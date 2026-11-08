@@ -227,14 +227,13 @@ public final class Binaries {
         java.util.Map<String, String> e = pb.environment();
         e.put("HOME", home);
         e.put("TMPDIR", c.getCacheDir().getAbsolutePath());
-        // P7 native shims (no proot): bin/ (user + busybox) → P9 wrappers/ (alpine)
-        // → shims/ (bash/git/pkg fallbacks) → system.
+        // Android Toybox first: this device's inherited seccomp policy kills
+        // BusyBox applets. User-imported binaries and app shims remain available.
         // P42: build the CA bundle FIRST so shim generation can point at it.
         String caPem = CaBundle.ensure(c);
         Shims.ensure(c);
-        e.put("PATH", files + "/bin:" + files + "/wrappers:" + files
-                + "/shims:" + files
-                + ":/system/bin:/system/xbin");
+        e.put("PATH", "/system/bin:/system/xbin:" + files + "/bin:"
+                + files + "/shims:" + files + "/wrappers:" + files);
         e.put("XDG_DATA_HOME", home + "/.local/share");
         e.put("XDG_CONFIG_HOME", home + "/.config");
         e.put("XDG_CACHE_HOME", home + "/.cache");
