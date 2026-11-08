@@ -1077,10 +1077,10 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
             ui.post(() -> {
                 if (isFinishing() || isDestroyed()) return;
                 refreshDebian();
-                prog.setText(ok
-                        ? "Debian ready — apt and git verified."
-                        : "Setup incomplete. Latest diagnostic is shown above; "
-                                + "open Sandbox doctor for the proot status.");
+                prog.append(ok
+                        ? "\\n\\nDebian ready — apt and git verified."
+                        : "\\n\\nSetup incomplete — see the preceding failure detail "
+                                + "and Sandbox doctor for the proot status.");
                 bgPill.setText("Close");
             });
         }, "oc-debian").start();
