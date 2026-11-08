@@ -238,6 +238,13 @@ public final class Debian {
             say(cb, "repairing proot toolkit…");
             unpackBinaries(c);
 
+            // Cheap host-side gate: never spend bandwidth/storage on the
+            // Debian layer unless the bundled proot can execute on-device.
+            if (!preflightProot(c, cb)) {
+                say(cb, "proot host preflight failed — Debian download skipped; Lite shell remains active");
+                return false;
+            }
+
             if (!extracted(c)) {
                 File blob = new File(c.getCacheDir(), "debian-rootfs.tar.gz");
                 if (!blob.exists() || blob.length() < 30_000_000) {
@@ -298,6 +305,62 @@ public final class Debian {
         copyAssetExec(c, "db_shmem", new File(lib, "libandroid-shmem.so"));
         // talloc keeps its SONAME so LD_LIBRARY_PATH resolves it
         copyAssetExec(c, "db_talloc", new File(lib, "libtalloc.so.2"));
+    }
+
+    /**
+     * Run the bundled proot against a host executable before downloading
+     * the Debian rootfs. This is deliberately independent of rootfs state.
+     */
+    static boolean preflightProot(Context c, Progress cb) {
+        ensureDirs(c);
+        Process p = null;
+        try {
+            ArrayList<String> argv = new ArrayList<>();
+            argv.add(new File(binDir(c), "proot").getAbsolutePath());
+            argv.add("-0");
+            argv.add("--link2symlink");
+            argv.add("--kill-on-exit");
+            argv.add("/system/bin/echo");
+            argv.add("probe-ok");
+
+            ProcessBuilder pb = new ProcessBuilder(argv);
+            pb.redirectErrorStream(true);
+            Map<String, String> env = pb.environment();
+            env.put("PROOT_LOADER", new File(binDir(c), "loader").getAbsolutePath());
+            env.put("PROOT_TMP_DIR", new File(dir(c), "tmp").getAbsolutePath());
+            env.put("LD_LIBRARY_PATH", libDir(c).getAbsolutePath());
+            env.put("PROOT_NO_SECCOMP", "1");
+            env.put("PROOT_IGNORE_MISSING_BINDINGS", "1");
+
+            p = pb.start();
+            boolean finished = p.waitFor(20, TimeUnit.SECONDS);
+            if (!finished) {
+                p.destroyForcibly();
+                say(cb, "proot host preflight timed out");
+                return false;
+            }
+            String output = Api.readAll(p.getInputStream());
+            boolean ok = p.exitValue() == 0 && output.contains("probe-ok");
+            if (ok) {
+                say(cb, "proot host preflight passed");
+            } else {
+                writeText(new File(dir(c), "preflight-report.txt"),
+                        "rc=" + p.exitValue() + "\\nargv="
+                        + String.join(" ", argv) + "\\n" + output);
+                say(cb, "proot host preflight failed (rc="
+                        + p.exitValue() + "): " + output);
+            }
+            return ok;
+        } catch (Exception e) {
+            try {
+                writeText(new File(dir(c), "preflight-report.txt"),
+                        "proot host preflight exception: " + e + "\\n");
+            } catch (Exception ignored) {}
+            say(cb, "proot host preflight failed: " + e);
+            return false;
+        } finally {
+            if (p != null && p.isAlive()) p.destroyForcibly();
+        }
     }
 
     // --------------------------------------------------- registry dance
