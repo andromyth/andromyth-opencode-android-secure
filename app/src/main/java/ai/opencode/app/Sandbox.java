@@ -45,7 +45,7 @@ import java.io.OutputStream;
  *   shims/ (bash/git/pkg fallbacks) → /system/bin.
  *
  * Non-root realities: apk --root runs as the app uid. chown-to-root
- * warnings from apk are cosmetic (we own every file); --no-scripts skips
+ * warnings from apk are cosmetic (we own every file); maintainer scripts are run
  * maintainer scripts that assume an Alpine /bin/sh at boot.
  */
 public final class Sandbox {
@@ -302,9 +302,16 @@ public final class Sandbox {
         File al = alpineDir(c);
         if (!new File(al, "lib/ld-musl-aarch64.so.1").isFile()) return 0;
         File wrap = wrappersDir(c);
-        if (force) {
-            File[] old = wrap.listFiles();
-            if (old != null) for (File f : old) f.delete();
+        File[] existing = wrap.listFiles();
+        if (existing != null) for (File old : existing) {
+            if (force) {
+                old.delete();
+            } else {
+                try {
+                    String body = new String(java.nio.file.Files.readAllBytes(old.toPath()), "UTF-8");
+                    if (body.contains("/bin/busybox")) old.delete();
+                } catch (Exception ignored) {}
+            }
         }
         File userBin = Shims.binDir(c); // user imports always win
         int made = 0;
@@ -321,7 +328,7 @@ public final class Sandbox {
                     File w = new File(wrap, name);
                     if (w.exists()) continue;
                     String script = wrapperFor(c, f);
-                    if (script == null) continue;
+                    if (script == null || script.contains("/bin/busybox")) continue;
                     writeText(w, script);
                     w.setExecutable(true, false);
                     w.setReadable(true, false);
@@ -335,7 +342,7 @@ public final class Sandbox {
             if (!w.exists() || force) {
                 writeText(w, prolog(c)
                         + "exec \"$LB\" --library-path \"$LP\" \"$AL/sbin/apk\" "
-                        + "--root \"$AL\" --no-scripts \"$@\"\n");
+                        + "--root \"$AL\" \"$@\"\n");
                 w.setExecutable(true, false);
             }
         } catch (Exception ignored) {}
