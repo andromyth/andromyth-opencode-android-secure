@@ -47,7 +47,7 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
      *  P49 — the consistency release: no ANR on Settings/Diagnostics (the
      *  size walks left the main thread), the keyboard re-anchor, the
      *  once-and-quiet markdown finalize, bounded log reads. */
-    static final String VERSION_TAG = "0.52.0-p52";
+    static final String VERSION_TAG = "0.52.0-p53";
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private LinearLayout root;
@@ -717,7 +717,7 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
                     ? " · " + (known >= 0
                         ? Binaries.human(known) : "measuring…")
                     : ""));
-        debStatus.setTextColor(Debian.active(this) ? Theme.OK
+        debStatus.setTextColor(Debian.active(this) && Debian.aptReady(this) ? Theme.OK
                 : extracted ? Theme.WARN : Theme.TXT_DIM);
         if (debTitle != null) {
             debTitle.setText(extracted
@@ -1062,9 +1062,6 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
         prog.setPadding(Theme.dp(this, 4), Theme.dp(this, 8),
                 Theme.dp(this, 4), Theme.dp(this, 8));
         prog.setText("starting…");
-        // P34: the progress rides the Sheet; the quiet pill flips to
-        // "Close" when the watcher thread sees the install finish
-        // (the old code mutated the framework button).
         final Sheet sh = Sheet.show(this, "Debian environment");
         if (!sh.showing()) return;
         sh.add(prog);
@@ -1072,24 +1069,21 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
                 () -> Toast.makeText(this, "installing in background…",
                         Toast.LENGTH_SHORT).show());
         sh.add(bgPill);
-        new Thread(() -> Debian.install(this, msg -> ui.post(() -> {
-            if (isFinishing() || isDestroyed()) return;
-            prog.setText(msg);
-        })), "oc-debian").start();
-        // the thread finishes when install does; poll for completion to
-        // enable the Close state refresh without blocking the user
         new Thread(() -> {
-            while (true) {
-                try { Thread.sleep(1500); } catch (InterruptedException e) { return; }
-                boolean done = Debian.extracted(this);
-                ui.post(() -> {
-                    refreshDebian();
-                    if (done && sh.showing() && !isFinishing())
-                        bgPill.setText("Close");
-                });
-                if (done) return;
-            }
-        }, "oc-debian-watch").start();
+            boolean ok = Debian.install(this, msg -> ui.post(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                prog.setText(msg);
+            }));
+            ui.post(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                refreshDebian();
+                prog.setText(ok
+                        ? "Debian ready — apt and git verified."
+                        : "Setup incomplete. Latest diagnostic is shown above; "
+                                + "open Sandbox doctor for the proot status.");
+                bgPill.setText("Close");
+            });
+        }, "oc-debian").start();
     }
 
     /** P15 — the agent's own environment-detection ask, surfaced: runs the
