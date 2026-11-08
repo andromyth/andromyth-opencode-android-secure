@@ -50,31 +50,35 @@ public class DebianBootstrapTest {
     }
 
     @Test
-    public void aptRecovery_restoresDebconfBeforeConfiguringPendingPackages() {
+    public void aptRecovery_extractsDebconfPackageBeforeDpkgConfiguration() {
         String command = Debian.aptRecoveryCommand();
         int update = command.indexOf("apt-get update");
-        int debconf = command.indexOf("apt-get install -y --no-install-recommends debconf");
-        int frontendCheck = command.indexOf("test -x /usr/share/debconf/frontend");
+        int download = command.indexOf("apt-get download debconf");
+        int extract = command.indexOf("dpkg-deb -x");
+        int preconfigure = command.indexOf("test -x /usr/sbin/dpkg-preconfigure");
+        int frontend = command.indexOf("test -x /usr/share/debconf/frontend");
         int configure = command.indexOf("dpkg --configure -a");
         int appPackages = command.indexOf("apt-get install -y --no-install-recommends git ca-certificates");
         int audit = command.indexOf("dpkg --audit");
 
         assertTrue(update >= 0);
-        assertTrue(debconf > update);
-        assertTrue(frontendCheck > debconf);
-        assertTrue(configure > frontendCheck);
+        assertTrue(download > update);
+        assertTrue(extract > download);
+        assertTrue(preconfigure > extract);
+        assertTrue(frontend > preconfigure);
+        assertTrue(configure > frontend);
         assertTrue(appPackages > configure);
         assertTrue(audit > appPackages);
     }
 
     @Test
-    public void aptRecovery_requiresBothDebconfExecutablesBeforeDpkgRecovery() {
+    public void aptRecovery_doesNotUseAptToInstallDebconfBeforeRepair() {
         String command = Debian.aptRecoveryCommand();
-        assertTrue(command.contains("[ ! -x /usr/sbin/dpkg-preconfigure ]"));
-        assertTrue(command.contains("[ ! -x /usr/share/debconf/frontend ]"));
-        assertTrue(command.contains("test -x /usr/sbin/dpkg-preconfigure"));
-        assertTrue(command.contains("test -x /usr/share/debconf/frontend"));
-        assertTrue(command.contains("test -z \"$(dpkg --audit)\""));
+        assertTrue(command.contains("apt-get download debconf"));
+        assertTrue(command.contains("dpkg-deb -x"));
+        assertFalse(command.contains("apt-get install -y --no-install-recommends debconf"));
+        assertTrue(command.contains("export DEBIAN_FRONTEND=noninteractive"));
     }
+
 
 }
