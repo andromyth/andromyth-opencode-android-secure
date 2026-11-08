@@ -233,7 +233,7 @@ public final class Binaries {
         String caPem = CaBundle.ensure(c);
         Shims.ensure(c);
         e.put("PATH", "/system/bin:/system/xbin:" + files + "/bin:"
-                + files + "/shims:" + files + "/wrappers:" + files);
+                + files + "/wrappers:" + files + "/shims:" + files);
         e.put("XDG_DATA_HOME", home + "/.local/share");
         e.put("XDG_CONFIG_HOME", home + "/.config");
         e.put("XDG_CACHE_HOME", home + "/.cache");
