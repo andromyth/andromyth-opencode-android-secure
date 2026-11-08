@@ -108,6 +108,46 @@ public class ShimTest {
                 script.contains("if [ \"$1\" = -y ] || [ \"$1\" = --yes ]; then shift; fi; apk add"));
         assertTrue("help documents the accepted -y alias",
                 script.contains("pkg install [-y] <pkgs...>"));
+        assertTrue("pkg uses Toybox for filesystem setup",
+                script.contains("/system/bin/mkdir -p"));
+        assertTrue("pkg reports apk SIGSYS rather than silently failing",
+                script.contains("Android seccomp (SIGSYS)"));
+        assertTrue("pkg keeps a private temp directory",
+                script.contains("TMPDIR=\\"$AL/tmp\\""));
+    }
+
+    @Test
+    public void ensure_removesOnlyBusyboxAppletLinks() throws Exception {
+        Context c = RuntimeEnvironment.getApplication();
+        File bin = Shims.binDir(c);
+        File busybox = new File(bin, "busybox");
+        try (java.io.InputStream in = c.getAssets().open("busybox");
+             java.io.OutputStream out = new java.io.FileOutputStream(busybox)) {
+            byte[] b = new byte[8192]; int n;
+            while ((n = in.read(b)) > 0) out.write(b, 0, n);
+        }
+        File applet = new File(bin, "ls");
+        android.system.Os.symlink("busybox", applet.getAbsolutePath());
+        File imported = new File(bin, "my-tool");
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(imported)) {
+            out.write(1);
+        }
+        Shims.ensure(c);
+        assertFalse("app-generated BusyBox applet symlink removed", applet.exists());
+        assertTrue("real imported binary preserved", imported.isFile());
+        assertTrue("BusyBox binary remains available for explicit diagnostics", busybox.isFile());
+    }
+
+    @Test
+    public void applyEnv_prefersAndroidToybox() {
+        Context c = RuntimeEnvironment.getApplication();
+        ProcessBuilder pb = new ProcessBuilder("/system/bin/sh");
+        Binaries.applyEnv(c, pb);
+        String path = pb.environment().get("PATH");
+        assertTrue("Toybox/system tools must win over bundled BusyBox",
+                path.startsWith("/system/bin:/system/xbin:"));
+        assertTrue("user binary directory remains on PATH",
+                path.contains(c.getFilesDir().getAbsolutePath() + "/bin"));
     }
 
     @Test
