@@ -10,7 +10,6 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.concurrent.TimeUnit;
 
 /**
  * P7: native command shims — the "small Termux" layer, WITHOUT proot.
@@ -90,7 +89,7 @@ public final class Shims {
             }
 
             // P12: static applets first on PATH — user imports still win
-            installApplets(c, bb);
+            installApplets(c);
 
             String f = c.getFilesDir().getAbsolutePath();
             File realBash = new File(bin, "bash");
@@ -197,7 +196,7 @@ public final class Shims {
      * musl-dynamic wrappers — the SIGSYS killer — while user imports
      * (checked first) still win over everything.
      */
-    private static void installApplets(Context c, File bb) {
+    private static void installApplets(Context c) {
         // Keep the binary for explicit diagnostics, but remove only symlinks
         // created by this app: Android seccomp kills BusyBox applet execution.
         File bin = binDir(c);
@@ -212,33 +211,7 @@ public final class Shims {
         }
     }
 
-    /** `busybox --list` output, cached under files/. Empty on any failure. */
-    private static java.util.List<String> busyboxList(Context c, File bb) {
-        File cache = new File(c.getFilesDir(), "busybox-applets.txt");
-        if (cache.isFile()) {
-            try {
-                String[] lines = new String(read(cache), "UTF-8").split("\n");
-                java.util.List<String> out = new java.util.ArrayList<>();
-                for (String l : lines) if (!l.trim().isEmpty()) out.add(l.trim());
-                return out;
-            } catch (Exception ignored) {}
-        }
-        java.util.List<String> out = new java.util.ArrayList<>();
-        try {
-            ProcessBuilder pb = new ProcessBuilder(bb.getAbsolutePath(), "--list");
-            pb.redirectErrorStream(true);
-            Process p = pb.start();
-            String s = Api.readAll(p.getInputStream());
-            if (p.waitFor(10, TimeUnit.SECONDS) && p.exitValue() == 0) {
-                for (String l : s.split("\n"))
-                    if (!l.trim().isEmpty()) out.add(l.trim());
-                try (OutputStream o = new FileOutputStream(cache)) {
-                    o.write(s.getBytes("UTF-8"));
-                }
-            }
-        } catch (Exception ignored) {}
-        return out;
-    }
+    // Historical applet inventory retained for P22 regression coverage only.
 
     // --------------------------------------------------- P12 bash routing
 
