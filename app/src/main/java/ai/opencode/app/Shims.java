@@ -198,43 +198,18 @@ public final class Shims {
      * (checked first) still win over everything.
      */
     private static void installApplets(Context c, File bb) {
-        if (bb == null || !bb.isFile()) return;
+        // Keep the binary for explicit diagnostics, but remove only symlinks
+        // created by this app: Android seccomp kills BusyBox applet execution.
         File bin = binDir(c);
-        // P22: flag bumped from .applets-p12 so installs that ran the OLD
-        // fallback (busybox --list failed once) re-run and drop the dead
-        // `patch` symlink this list used to create. Only a SYMLINK named
-        // patch is removed — a user-imported real binary is never touched.
-        File flag = new File(bin, ".applets-p22");
-        if (!flag.exists()) {
-            File oldPatch = new File(bin, "patch");
+        File[] entries = bin.listFiles();
+        if (entries == null) return;
+        for (File entry : entries) {
             try {
-                Os.readlink(oldPatch.getAbsolutePath());
-                oldPatch.delete();          // symlink → was ours, dead applet
-            } catch (Exception notLinkOrAbsent) { /* real file or absent: keep */ }
+                if ("busybox".equals(Os.readlink(entry.getAbsolutePath()))) entry.delete();
+            } catch (Exception notOurSymlink) {
+                // Preserve real user imports and unrelated symlinks.
+            }
         }
-        if (flag.exists()) return;              // one-time per install
-        java.util.List<String> supported = busyboxList(c, bb);
-        int made = 0;
-        for (String a : (supported.isEmpty()
-                ? java.util.Arrays.asList(CORE_APPLETS) : supported)) {
-            if (a.equals("busybox") || a.equals("sh") || a.equals("ash")
-                    || a.equals("bash") || a.equals("git") || a.equals("pkg"))
-                continue;
-            File dst = new File(bin, a);
-            if (dst.exists()) continue;         // user import or existing link
-            try {
-                Os.symlink("busybox", dst.getAbsolutePath());
-                dst.setExecutable(true, false);
-                made++;
-            } catch (Exception ignored) {}
-        }
-        try {
-            File tmp = new File(bin, ".applets-p12.part");
-            java.io.FileOutputStream fo = new java.io.FileOutputStream(tmp);
-            fo.write(("made " + made + "\n").getBytes("UTF-8"));
-            fo.close();
-            tmp.renameTo(flag);
-        } catch (Exception ignored) {}
     }
 
     /** `busybox --list` output, cached under files/. Empty on any failure. */
