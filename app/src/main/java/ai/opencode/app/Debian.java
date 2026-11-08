@@ -991,39 +991,43 @@ public final class Debian {
     }
 
     /** apt update + git + certificates; never mark success on a failed command. */
+    /** Recovery-first bootstrap for minimal Debian rootfs layers. */
+    static String aptRecoveryCommand() {
+        return "set -e; "
+             + "apt-get update; "
+             + "if [ ! -x /usr/sbin/dpkg-preconfigure ] || "
+             + "[ ! -x /usr/share/debconf/frontend ]; then "
+             + "apt-get install -y --no-install-recommends debconf; fi; "
+             + "test -x /usr/sbin/dpkg-preconfigure; "
+             + "test -x /usr/share/debconf/frontend; "
+             + "dpkg --configure -a; "
+             + "apt-get install -y --no-install-recommends git ca-certificates; "
+             + "git --version; "
+             + "test -s /etc/ssl/certs/ca-certificates.crt; "
+             + "test -z \"$(dpkg --audit)\"";
+    }
+
     private static boolean aptBootstrap(Context c, Progress cb) {
+        new File(dir(c), ".apt-ready").delete();
         StringBuilder out = new StringBuilder();
-        int updateRc = runGuest(c, "apt-get update", out, 300);
-        if (updateRc != 0) {
-            say(cb, "apt-get update failed (rc=" + updateRc + "): " + tail(out));
-            return false;
-        }
-
-        out.setLength(0);
-        int installRc = runGuest(c,
-                "apt-get install -y --no-install-recommends git ca-certificates",
-                out, 600);
+        int installRc = runGuest(c, aptRecoveryCommand(), out, 900);
         if (installRc != 0) {
-            say(cb, "apt install failed (rc=" + installRc + "): " + tail(out));
+            say(cb, "apt/debconf recovery failed (rc=" + installRc + "): " + tail(out));
             return false;
         }
-
-        out.setLength(0);
-        int verifyRc = runGuest(c, "git --version && test -s /etc/ssl/certs/ca-certificates.crt",
-                out, 30);
-        if (verifyRc != 0 || !out.toString().contains("git version")) {
-            say(cb, "apt completed but git/CA verification failed (rc="
-                    + verifyRc + "): " + tail(out));
+        if (!out.toString().contains("git version")) {
+            say(cb, "apt recovery completed without Git verification output: " + tail(out));
             return false;
         }
 
         try {
-            writeMarker(new File(dir(c), ".apt-ready"), "git + ca-certificates verified\n");
+            writeMarker(new File(dir(c), ".apt-ready"),
+                    "debconf + dpkg + git + ca-certificates verified\\n");
         } catch (IOException e) {
             say(cb, "could not save apt-ready marker: " + e);
             return false;
         }
-        say(cb, "apt + git verified: " + out.toString().trim());
+        say(cb, "apt + debconf + git + CA verified: " + tail(out));
         return true;
     }
 
