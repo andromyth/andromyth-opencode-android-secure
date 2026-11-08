@@ -23,10 +23,13 @@ public class DebianBootstrapTest {
         File debian = Debian.dir(context);
         File marker = new File(debian, ".apt-ready");
         File git = new File(Debian.rootfsDir(context), "usr/bin/git");
+        File ca = new File(Debian.rootfsDir(context),
+                "etc/ssl/certs/ca-certificates.crt");
         marker.getParentFile().mkdirs();
         git.getParentFile().mkdirs();
         marker.delete();
         git.delete();
+        ca.delete();
 
         assertFalse(Debian.aptReady(context));
 
@@ -36,6 +39,11 @@ public class DebianBootstrapTest {
         assertFalse(Debian.aptReady(context));
 
         try (FileOutputStream out = new FileOutputStream(git)) {
+            out.write(new byte[] {1});
+        }
+        assertFalse(Debian.aptReady(context));
+        ca.getParentFile().mkdirs();
+        try (FileOutputStream out = new FileOutputStream(ca)) {
             out.write(new byte[] {1});
         }
         assertTrue(Debian.aptReady(context));
