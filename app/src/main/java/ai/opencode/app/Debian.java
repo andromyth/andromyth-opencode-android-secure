@@ -1000,15 +1000,15 @@ public final class Debian {
              + "cd /tmp/oc-debconf; "
              + "apt-get download debconf; "
              + "set -- debconf_*.deb; "
-             + "test -f \\"$1\\"; "
-             + "dpkg-deb -x \\"$1\\" /; "
+             + "test -f $1; "
+             + "dpkg-deb -x $1 /; "
              + "test -x /usr/sbin/dpkg-preconfigure; "
              + "test -x /usr/share/debconf/frontend; "
              + "dpkg --configure -a; "
              + "apt-get install -y --no-install-recommends git ca-certificates; "
              + "git --version; "
              + "test -s /etc/ssl/certs/ca-certificates.crt; "
-             + "test -z \\"$(dpkg --audit)\\"";
+             + "if dpkg --audit | grep -q .; then exit 1; fi";
     }
 
     private static boolean aptBootstrap(Context c, Progress cb) {
