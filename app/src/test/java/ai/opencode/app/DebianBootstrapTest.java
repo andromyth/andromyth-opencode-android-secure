@@ -48,4 +48,33 @@ public class DebianBootstrapTest {
         }
         assertTrue(Debian.aptReady(context));
     }
+
+    @Test
+    public void aptRecovery_restoresDebconfBeforeConfiguringPendingPackages() {
+        String command = Debian.aptRecoveryCommand();
+        int update = command.indexOf("apt-get update");
+        int debconf = command.indexOf("apt-get install -y --no-install-recommends debconf");
+        int frontendCheck = command.indexOf("test -x /usr/share/debconf/frontend");
+        int configure = command.indexOf("dpkg --configure -a");
+        int appPackages = command.indexOf("apt-get install -y --no-install-recommends git ca-certificates");
+        int audit = command.indexOf("dpkg --audit");
+
+        assertTrue(update >= 0);
+        assertTrue(debconf > update);
+        assertTrue(frontendCheck > debconf);
+        assertTrue(configure > frontendCheck);
+        assertTrue(appPackages > configure);
+        assertTrue(audit > appPackages);
+    }
+
+    @Test
+    public void aptRecovery_requiresBothDebconfExecutablesBeforeDpkgRecovery() {
+        String command = Debian.aptRecoveryCommand();
+        assertTrue(command.contains("[ ! -x /usr/sbin/dpkg-preconfigure ]"));
+        assertTrue(command.contains("[ ! -x /usr/share/debconf/frontend ]"));
+        assertTrue(command.contains("test -x /usr/sbin/dpkg-preconfigure"));
+        assertTrue(command.contains("test -x /usr/share/debconf/frontend"));
+        assertTrue(command.contains("test -z \\"$(dpkg --audit)\\""));
+    }
+
 }
