@@ -74,7 +74,7 @@ public class DebianBootstrapTest {
         assertTrue(command.contains("[ ! -x /usr/share/debconf/frontend ]"));
         assertTrue(command.contains("test -x /usr/sbin/dpkg-preconfigure"));
         assertTrue(command.contains("test -x /usr/share/debconf/frontend"));
-        assertTrue(command.contains("test -z \\"$(dpkg --audit)\\""));
+        assertTrue(command.contains("test -z \"$(dpkg --audit)\""));
     }
 
 }
