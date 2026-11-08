@@ -108,10 +108,13 @@ public final class Debian {
 
     /** apt bootstrap completed and git is present in the guest. */
     public static boolean aptReady(Context c) {
+        File root = rootfsDir(c);
         return new File(dir(c), ".apt-ready").isFile()
-                && new File(rootfsDir(c), "usr/bin/git").isFile()
-                && new File(rootfsDir(c),
-                        "etc/ssl/certs/ca-certificates.crt").isFile();
+                && new File(root, "usr/bin/git").isFile()
+                && new File(root, "usr/bin/perl").isFile()
+                && new File(root, "usr/share/debconf/frontend").isFile()
+                && new File(root, "usr/sbin/dpkg-preconfigure").isFile()
+                && new File(root, "etc/ssl/certs/ca-certificates.crt").isFile();
     }
 
     /** Debian shells active = extracted + probe passed + user switch on. */
@@ -991,19 +994,22 @@ public final class Debian {
     }
 
     /** apt update + git + certificates; never mark success on a failed command. */
-    /** Restore debconf files without asking apt to configure broken packages first. */
+    /** Restore debconf and its Perl interpreter before configuring broken packages. */
     static String aptRecoveryCommand() {
         return "set -e; "
              + "export DEBIAN_FRONTEND=noninteractive; "
              + "apt-get update; "
              + "mkdir -p /tmp/oc-debconf; "
              + "cd /tmp/oc-debconf; "
-             + "apt-get download debconf; "
-             + "set -- debconf_*.deb; "
+             + "rm -f ./*.deb; "
+             + "apt-get download debconf perl-base; "
+             + "set -- ./*.deb; "
              + "test -f $1; "
-             + "dpkg-deb -x $1 /; "
+             + "for f in $@; do dpkg-deb -x $f /; done; "
+             + "test -x /usr/bin/perl; "
              + "test -x /usr/sbin/dpkg-preconfigure; "
              + "test -x /usr/share/debconf/frontend; "
+             + "/usr/bin/perl -e 'print qq(perl-ok\\\\n)'; "
              + "dpkg --configure -a; "
              + "apt-get install -y --no-install-recommends git ca-certificates; "
              + "git --version; "
