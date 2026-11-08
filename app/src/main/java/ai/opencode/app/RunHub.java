@@ -4398,7 +4398,7 @@ public final class RunHub implements ServerService.EventListener {
             }
             final String f = errS;
             final boolean done = ok;
-            ServerService.noteAnswered(id);
+            if (done) ServerService.noteAnswered(id);
             main(() -> {
                 if (cb != null) cb.accept(done, f);
                 else if (!done) sys("permission reply failed · " + f);

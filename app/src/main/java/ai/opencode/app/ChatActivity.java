@@ -2929,7 +2929,9 @@ public class ChatActivity extends Activity
                 if (!blankText) {
                     box.addView(body);
                     if (!streaming) {
-                        addCodeCopyButtons(box, NoteStrip.trimTail(r.text.toString()));
+                        String responseText = NoteStrip.trimTail(r.text.toString());
+                        addResponseCopyButton(box, responseText);
+                        addCodeCopyButtons(box, responseText);
                     }
                 }
                 if (r.meta != null && !r.meta.isEmpty()) {
@@ -3367,6 +3369,25 @@ public class ChatActivity extends Activity
         }
     }
 
+    /** Visible whole-response copy action, separate from per-code-block copy. */
+    void addResponseCopyButton(LinearLayout box, String source) {
+        TextView copy = text(12, R.color.accent_light, false);
+        copy.setText("⧉  Copy response");
+        copy.setGravity(Gravity.CENTER_VERTICAL);
+        copy.setPadding(dp(4), dp(8), dp(12), dp(8));
+        copy.setClickable(true);
+        copy.setOnClickListener(v -> {
+            Theme.haptic(v);
+            copyText(source, "response");
+        });
+        Theme.press(copy);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(2);
+        box.addView(copy, lp);
+    }
+
     /** Independent native click targets; never share the selectable response TextView's touch handling. */
     void addCodeCopyButtons(LinearLayout box, String source) {
         List<String> blocks = Markdown.codeBlocks(source);
@@ -3432,6 +3453,20 @@ public class ChatActivity extends Activity
 
     // ------------------------------------------------------- permissions
 
+    // Session-scoped fallback matching the original OpenCode permission service:
+    // same session + permission/tool + resource patterns, not exact command text.
+    private final java.util.Set<String> sessionPermissionGrants = new java.util.HashSet<>();
+    private final java.util.Set<String> sessionGrantReplies = new java.util.HashSet<>();
+
+    private String permissionGrantKey(Map<String, Object> perm) {
+        if (perm == null) return null;
+        String sid = Json.str(perm, "sessionID");
+        String permission = Json.str(perm, "permission");
+        List<Object> patterns = Json.list(perm, "patterns");
+        if (sid == null || permission == null || patterns == null || patterns.isEmpty()) return null;
+        return sid + "|" + permission + "|" + patterns.toString();
+    }
+
     // P14: unattended mode — ids already auto-answered this session, so a
     // failed reply falls back to the card instead of looping forever.
     private final java.util.Set<String> autoReplied = new java.util.HashSet<>();
@@ -3457,6 +3492,26 @@ public class ChatActivity extends Activity
             permSlot.removeAllViews();
             return;
         }
+        // A session grant covers matching permission/resource scope for the
+        // rest of this session, even if the backend emits another request ID.
+        String grantKey = permissionGrantKey(perm);
+        String grantId = Json.str(perm, "id");
+        if (grantKey != null && sessionPermissionGrants.contains(grantKey)) {
+            if (grantId != null && sessionGrantReplies.add(grantId)) {
+                RunHub.answerPermission(grantId, "always", (ok, err) -> {
+                    if (!ok) {
+                        sessionGrantReplies.remove(grantId);
+                        sessionPermissionGrants.remove(grantKey);
+                        sys("session permission reply failed · " + err);
+                    }
+                    checkPermissionQueue();
+                });
+            }
+            permSlot.setVisibility(View.GONE);
+            permSlot.removeAllViews();
+            return;
+        }
+
         // P14/P25: AUTO-ALLOW (unattended mode) — answering moved to
         // RunHub, which reacts to permission EVENTS with no screen bound
         // (the agent can never stall while the user is elsewhere). This
@@ -3550,14 +3605,14 @@ public class ChatActivity extends Activity
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         blp.topMargin = dp(12);
 
-        TextView deny = permButton("Deny", "reject", Theme.denyPill(this), id, R.color.err);
+        TextView deny = permButton("Deny", "reject", Theme.denyPill(this), id, R.color.err, null);
         btns.addView(deny);
-        TextView always = permButton("Always allow", "always", Theme.outlinePill(this), id, R.color.accent_light);
+        TextView always = permButton("Allow for session", "always", Theme.outlinePill(this), id, R.color.accent_light, perm);
         LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         alp.leftMargin = dp(8);
         btns.addView(always, alp);
-        TextView allow = permButton("Allow", "once", Theme.allowPill(this), id, R.color.on_accent);
+        TextView allow = permButton("Allow once", "once", Theme.allowPill(this), id, R.color.on_accent, null);
         LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         vlp.leftMargin = dp(8);
@@ -3574,7 +3629,8 @@ public class ChatActivity extends Activity
 
     /** P10: one solid, tappable permission button (min touch target 44dp). */
     private TextView permButton(String label, String response,
-                                android.graphics.drawable.Drawable bg, String id, int colorRes) {
+                                android.graphics.drawable.Drawable bg, String id, int colorRes,
+                                Map<String, Object> permissionScope) {
         TextView b = text(13, colorRes, true);
         b.setText(label);
         b.setBackground(bg);
@@ -3584,7 +3640,7 @@ public class ChatActivity extends Activity
         b.setOnClickListener(v -> {
             Theme.haptic(v);
             Theme.pop(b);
-            if (id != null) answerPermission(id, response);
+            if (id != null) answerPermission(id, response, permissionScope);
             else {
                 Toast.makeText(this, "missing request id — reopening…",
                         Toast.LENGTH_SHORT).show();
@@ -3595,12 +3651,23 @@ public class ChatActivity extends Activity
     }
 
     private void answerPermission(String id, String response) {
+        answerPermission(id, response, null);
+    }
+
+    private void answerPermission(String id, String response, Map<String, Object> permissionScope) {
         // P25: one reply ladder, in RunHub. The view adds the human bits:
         // the toast and the immediate card refresh.
         RunHub.answerPermission(id, response, (ok, errS) -> {
             if (ok) {
+                if ("always".equals(response)) {
+                    String grantKey = permissionGrantKey(permissionScope);
+                    if (grantKey != null) {
+                        sessionPermissionGrants.add(grantKey);
+                        sessionGrantReplies.add(id);
+                    }
+                }
                 Toast.makeText(this,
-                        "always".equals(response) ? "always allowed"
+                        "always".equals(response) ? "allowed for session"
                                 : "reject".equals(response) ? "denied" : "allowed",
                         Toast.LENGTH_SHORT).show();
             } else {
