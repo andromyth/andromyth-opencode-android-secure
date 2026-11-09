@@ -44,6 +44,48 @@ public class PacketCaptureTest {
         return f;
     }
 
+    private static byte[] dnsQuestion(String hostname) {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        out.write(0x12); out.write(0x34); out.write(0x01); out.write(0x00);
+        out.write(0x00); out.write(0x01); out.write(0x00); out.write(0x00);
+        out.write(0x00); out.write(0x00); out.write(0x00); out.write(0x00);
+        for (String label : hostname.split("\\.")) {
+            byte[] bytes = label.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+            out.write(bytes.length); out.write(bytes, 0, bytes.length);
+        }
+        out.write(0); out.write(0); out.write(1); out.write(0); out.write(1);
+        return out.toByteArray();
+    }
+
+    private static byte[] tlsClientHello(String hostname) {
+        byte[] name = hostname.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        int sniDataLen = 2 + 1 + 2 + name.length;
+        int extLen = 4 + sniDataLen;
+        int bodyLen = 2 + 32 + 1 + 2 + 2 + 1 + 1 + 2 + extLen;
+        int handshakeLen = 4 + bodyLen;
+        byte[] b = new byte[5 + handshakeLen];
+        int p = 0;
+        b[p++] = 0x16; b[p++] = 0x03; b[p++] = 0x01;
+        b[p++] = (byte) (handshakeLen >>> 8); b[p++] = (byte) handshakeLen;
+        b[p++] = 0x01;
+        b[p++] = (byte) (bodyLen >>> 16); b[p++] = (byte) (bodyLen >>> 8);
+        b[p++] = (byte) bodyLen;
+        b[p++] = 0x03; b[p++] = 0x03;                  // legacy version
+        p += 32;                                       // random
+        b[p++] = 0;                                    // session id
+        b[p++] = 0; b[p++] = 2; b[p++] = 0x13; b[p++] = 0x01;
+        b[p++] = 1; b[p++] = 0;                        // compression
+        b[p++] = (byte) (extLen >>> 8); b[p++] = (byte) extLen;
+        b[p++] = 0; b[p++] = 0;                        // SNI extension
+        b[p++] = (byte) (sniDataLen >>> 8); b[p++] = (byte) sniDataLen;
+        int listLen = 3 + name.length;
+        b[p++] = (byte) (listLen >>> 8); b[p++] = (byte) listLen;
+        b[p++] = 0;                                    // host_name
+        b[p++] = (byte) (name.length >>> 8); b[p++] = (byte) name.length;
+        System.arraycopy(name, 0, b, p, name.length);
+        return b;
+    }
+
     private static byte[] ipv4Udp(int sport, int dport, byte[] payloadContent) {
         int udpLen = 8 + payloadContent.length;
         byte[] f = new byte[20 + udpLen];
@@ -100,6 +142,31 @@ public class PacketCaptureTest {
         assertEquals("SYN", p.tcpFlagText());
         assertEquals("TLS", p.appProto);
         assertTrue(p.summary.contains("→"));
+    }
+
+    @Test public void httpHostHeaderIsExtracted() {
+        byte[] payload = "GET / HTTP/1.1\\r\\nHost: Example.COM:8080\\r\\n\\r\\n"
+                .getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        Packet p = PacketParser.parse(1500L, ipv4Tcp(payload, 50000, 80, 0x18));
+        assertNotNull(p);
+        assertEquals("example.com", p.host);
+        assertTrue(p.summary.contains("host=example.com"));
+    }
+
+    @Test public void tlsClientHelloSniIsExtractedWithoutDecryptingPayload() {
+        byte[] payload = tlsClientHello("secure.example.org");
+        Packet p = PacketParser.parse(1600L, ipv4Tcp(payload, 50000, 443, 0x18));
+        assertNotNull(p);
+        assertEquals("TLS", p.appProto);
+        assertEquals("secure.example.org", p.host);
+    }
+
+    @Test public void dnsQuestionNameIsExtracted() {
+        byte[] payload = dnsQuestion("api.example.net");
+        Packet p = PacketParser.parse(1700L, ipv4Udp(53000, 53, payload));
+        assertNotNull(p);
+        assertEquals("DNS", p.appProto);
+        assertEquals("api.example.net", p.host);
     }
 
     @Test public void rawIpv4Udp_dnsDetected() {
