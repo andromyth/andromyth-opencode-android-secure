@@ -1,30 +1,38 @@
 package ai.opencode.app;
 
-/** One captured IP packet, dissected enough for a wireshark-style summary
- *  line plus the sniffnet-style statistics the capture UI aggregates.
- *
- *  <p>Frames captured through a {@code VpnService} tun descriptor are RAW IP
- *  packets (no Ethernet header); frames captured elsewhere may carry an
- *  Ethernet header. {@link PacketParser} normalizes both before building a
- *  {@code Packet}, and {@link PcapWriter} writes {@link #raw} as-is. */
+/** One captured IP packet and best-effort application metadata. */
 public final class Packet {
     public final long timeMs;
-    public final int length;        // IPv4/IPv6 total length
-    public final int capturedLen;   // bytes actually captured
+    public final int length;
+    public final int capturedLen;
     public final String srcIp;
     public final String dstIp;
-    public final int srcPort;       // -1 when the transport has no ports
-    public final int dstPort;       // -1 when the transport has no ports
-    public final String proto;      // TCP / UDP / ICMP / ICMPv6 / OTHER
-    public final String appProto;   // HTTP / TLS / DNS / … or "" when unknown
-    public final int tcpFlags;      // TCP flag byte, -1 when not TCP
-    public final int payloadLen;    // transport payload bytes (not headers)
-    public final String summary;    // human dissection line
-    public final byte[] raw;        // captured frame, written verbatim to pcap
+    public final int srcPort;
+    public final int dstPort;
+    public final String proto;
+    public final String appProto;
+    public final int tcpFlags;
+    public final int payloadLen;
+    public final String summary;
+    public final byte[] raw;
+    /** Cleartext hostname metadata only; encrypted payload is never decrypted. */
+    public final String host;
+    /** -1 means Android could not map this flow to an application UID. */
+    public final int ownerUid;
+    /** Package names may be comma-separated for shared UIDs. */
+    public final String ownerPackages;
 
     public Packet(long timeMs, int length, int capturedLen, String srcIp, String dstIp,
             int srcPort, int dstPort, String proto, String appProto, int tcpFlags,
             int payloadLen, String summary, byte[] raw) {
+        this(timeMs, length, capturedLen, srcIp, dstIp, srcPort, dstPort, proto,
+                appProto, tcpFlags, payloadLen, summary, raw, "", -1, "");
+    }
+
+    public Packet(long timeMs, int length, int capturedLen, String srcIp, String dstIp,
+            int srcPort, int dstPort, String proto, String appProto, int tcpFlags,
+            int payloadLen, String summary, byte[] raw, String host,
+            int ownerUid, String ownerPackages) {
         this.timeMs = timeMs;
         this.length = length;
         this.capturedLen = capturedLen;
@@ -38,9 +46,17 @@ public final class Packet {
         this.payloadLen = payloadLen;
         this.summary = summary;
         this.raw = raw;
+        this.host = host == null ? "" : host;
+        this.ownerUid = ownerUid;
+        this.ownerPackages = ownerPackages == null ? "" : ownerPackages;
     }
 
-    /** Human TCP flag string ("SYN, ACK", …) or "" for non-TCP packets. */
+    public Packet withOwner(int uid, String packages) {
+        return new Packet(timeMs, length, capturedLen, srcIp, dstIp, srcPort,
+                dstPort, proto, appProto, tcpFlags, payloadLen, summary, raw,
+                host, uid, packages);
+    }
+
     public String tcpFlagText() {
         if (tcpFlags < 0) return "";
         StringBuilder b = new StringBuilder();
