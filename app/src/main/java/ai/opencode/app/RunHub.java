@@ -3112,6 +3112,108 @@ public final class RunHub implements ServerService.EventListener {
         });
     }
 
+    /** A file copied from Android's Storage Access Framework picker. */
+    static final class FilePart {
+        final File file;
+        final String mime, filename;
+        FilePart(File file, String mime, String filename) {
+            this.file = file; this.mime = mime; this.filename = filename;
+        }
+    }
+
+    /** Send mixed document/media attachments as native OpenCode file parts.
+     *  Unlike the image-only vision fallback, arbitrary files stay binary
+     *  attachments and are never decoded as images. */
+    public static void sendWithFiles(final List<FilePart> files, final String text) {
+        if (files == null || files.isEmpty()) { send(text); return; }
+        if (creditBlocked()) {
+            sys(CreditLimit.blockLine(spendTotal(), spendCap()));
+            return;
+        }
+        final String cap = (text == null || text.trim().isEmpty())
+                ? "Please inspect the attached files." : text.trim();
+        IO.execute(() -> {
+            String sid = ensureSession();
+            if (sid == null) { sys("server not healthy yet — try again in a moment"); return; }
+            int claim = claimRun(sid);
+            if (claim != RunBook.CLAIM_OK) {
+                sys(claim == RunBook.CLAIM_BUSY
+                        ? "this chat is still running — tap ■ to stop it first"
+                        : "parallel run limit reached — let one finish");
+                return;
+            }
+            try {
+                validateSelectedModel();
+                List<String> urls = new ArrayList<>();
+                List<String> mimes = new ArrayList<>();
+                List<String> names = new ArrayList<>();
+                for (FilePart p : files) {
+                    long size = p.file.length();
+                    if (size > 20L * 1024L * 1024L)
+                        throw new IOException(p.filename + " exceeds 20 MB");
+                    byte[] bytes = java.nio.file.Files.readAllBytes(p.file.toPath());
+                    urls.add("data:" + p.mime + ";base64,"
+                            + android.util.Base64.encodeToString(bytes,
+                                    android.util.Base64.NO_WRAP));
+                    mimes.add(p.mime);
+                    names.add(p.filename);
+                }
+                lastUserText = cap;
+                runHadOutput = false;
+                touchRun(sid);
+                List<String> bodies = buildMultiFileBodies(cap, urls, mimes, names,
+                        Models.selected(appCtx), agent);
+                Api.Resp r = null;
+                for (String body : bodies) {
+                    r = Api.post("/session/" + sid + "/message", body, 300_000);
+                    if (r.ok()) break;
+                }
+                if (r == null || !r.ok()) {
+                    sys("file upload failed" + (r == null ? "" : " · HTTP " + r.status));
+                    releaseRun(sid, false);
+                    return;
+                }
+                sys("📎 " + files.size() + (files.size() == 1
+                        ? " file attached" : " files attached"));
+                reconcile(r.body);
+                H.removeCallbacks(watchdog);
+                H.postDelayed(watchdog, 2000);
+            } catch (Exception e) {
+                sys("file upload failed: " + e.getMessage());
+                releaseRun(sid, false);
+            } catch (Throwable e) {
+                Trail.record(appCtx, "hub file upload", e);
+                sys("file upload hit an internal error — contained");
+                releaseRun(sid, false);
+            }
+        });
+    }
+
+    /** Build the normal model/agent fallback ladder with arbitrary file parts. */
+    static List<String> buildMultiFileBodies(String caption, List<String> dataUrls,
+            List<String> mimes, List<String> filenames, String[] sel, String agentMode) {
+        LinkedHashMap<String, String> variants = new LinkedHashMap<>();
+        String text = "{\"type\":\"text\",\"text\":" + Json.quote(caption) + "}";
+        StringBuilder parts = new StringBuilder(text);
+        for (int i = 0; i < dataUrls.size(); i++) {
+            String mime = mimes.get(i) == null ? "application/octet-stream" : mimes.get(i);
+            parts.append(",{\"type\":\"file\",\"mime\":")
+                 .append(Json.quote(mime)).append(",\"filename\":")
+                 .append(Json.quote(filenames.get(i))).append(",\"url\":")
+                 .append(Json.quote(dataUrls.get(i))).append('}');
+        }
+        String model = sel == null ? null
+                : "\"model\":{\"providerID\":" + Json.quote(sel[0])
+                + ",\"modelID\":" + Json.quote(sel[1]) + "}";
+        String ag = "\"agent\":" + Json.quote(agentMode);
+        String payload = "\"parts\":[" + parts + "]";
+        if (model != null) variants.put("ma", "{" + model + "," + ag + "," + payload + "}");
+        if (model != null) variants.put("m", "{" + model + "," + payload + "}");
+        variants.put("a", "{" + ag + "," + payload + "}");
+        variants.put("bare", "{" + payload + "}");
+        return new ArrayList<>(variants.values());
+    }
+
     /** Server phrasing for a vanished model (verified P11 LIVE against
      *  v1.18.25). Fires at RUN time (HTTP 200!), so both the POST body
      *  and streamed errors must match it. */
