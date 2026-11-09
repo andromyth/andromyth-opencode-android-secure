@@ -160,6 +160,7 @@ public final class PacketParser {
         int srcPort = -1, dstPort = -1;
         int tcpFlags = -1;
         int payloadLen = 0;
+        String host = "";
         String summary;
 
         if (!firstFragment) {
@@ -188,7 +189,10 @@ public final class PacketParser {
                     int tcpPayload = l4Len - dataOff;
                     if (tcpPayload < 0) tcpPayload = 0;
                     payloadLen = tcpPayload;
-                    if (firstFragment) app = appProtoTcp(f, l4 + dataOff, tcpPayload, srcPort, dstPort);
+                    if (firstFragment) {
+                        app = appProtoTcp(f, l4 + dataOff, tcpPayload, srcPort, dstPort);
+                        host = hostTcp(f, l4 + dataOff, tcpPayload);
+                    }
                     summary = String.format(Locale.US,
                             "TCP %s:%d → %s:%d [%s] len=%d win=%d%s",
                             src, srcPort, dst, dstPort, flagText(tcpFlags), tcpPayload, window,
@@ -208,7 +212,10 @@ public final class PacketParser {
                     if (udpPayload < 0 || udpPayload > l4Len - 8) udpPayload = l4Len - 8;
                     if (udpPayload < 0) udpPayload = 0;
                     payloadLen = udpPayload;
-                    if (firstFragment) app = appProtoUdp(f, l4 + 8, udpPayload, srcPort, dstPort);
+                    if (firstFragment) {
+                        app = appProtoUdp(f, l4 + 8, udpPayload, srcPort, dstPort);
+                        if ("DNS".equals(app)) host = dnsQuestion(f, l4 + 8, udpPayload);
+                    }
                     summary = String.format(Locale.US, "UDP %s:%d → %s:%d len=%d%s",
                             src, srcPort, dst, dstPort, udpPayload,
                             app.isEmpty() ? "" : "  " + app);
@@ -237,9 +244,10 @@ public final class PacketParser {
 
         byte[] raw = new byte[f.length];
         System.arraycopy(f, 0, raw, 0, f.length);
+        if (!host.isEmpty()) summary += " host=" + host;
         return new Packet(timeMs, totalLen > 0 ? totalLen : captured, captured,
                 src, dst, srcPort, dstPort, protoName, app, tcpFlags, payloadLen,
-                summary, raw);
+                summary, raw, host, -1, "");
     }
 
     // ------------------------------------------------------- app protocol
@@ -282,6 +290,95 @@ public final class PacketParser {
         if (sport == 137 || dport == 137 || sport == 138 || dport == 138) return "NetBIOS";
         if (sport == 546 || dport == 546 || sport == 547 || dport == 547) return "DHCPv6";
         return "";
+    }
+
+    // ------------------------------------------------------ host metadata
+
+    /** Extract HTTP Host or TLS ClientHello SNI when visible in this segment. */
+    static String hostTcp(byte[] f, int p, int len) {
+        if (f == null || p < 0 || len <= 0 || p >= f.length) return "";
+        int end = Math.min(f.length, p + len);
+        if (end - p >= 5 && u8(f, p) == 0x16) return tlsServerName(f, p, end);
+        int limit = Math.min(end, p + 8192);
+        String text = new String(f, p, limit - p, java.nio.charset.StandardCharsets.ISO_8859_1);
+        String[] lines = text.split("\\r?\\n");
+        for (String line : lines) {
+            int colon = line.indexOf(':');
+            if (colon > 0 && "host".equalsIgnoreCase(line.substring(0, colon).trim())) {
+                String value = line.substring(colon + 1).trim();
+                int port = value.lastIndexOf(':');
+                if (port > 0 && value.indexOf(']') < 0 && value.indexOf(':') == port)
+                    value = value.substring(0, port);
+                return cleanHost(value);
+            }
+        }
+        return "";
+    }
+
+    private static String tlsServerName(byte[] f, int p, int end) {
+        int recordEnd = Math.min(end, p + 5 + u16(f, p + 3));
+        int h = p + 5;
+        if (h + 4 > recordEnd || u8(f, h) != 1) return "";
+        int helloEnd = Math.min(recordEnd, h + 4
+                + ((u8(f, h + 1) << 16) | (u8(f, h + 2) << 8) | u8(f, h + 3)));
+        int q = h + 4 + 2 + 32;
+        if (q >= helloEnd) return "";
+        q += 1 + u8(f, q);                         // session ID
+        if (q + 2 > helloEnd) return "";
+        int ciphers = u16(f, q); q += 2 + ciphers;
+        if (q >= helloEnd) return "";
+        q += 1 + u8(f, q);                         // compression methods
+        if (q + 2 > helloEnd) return "";
+        int extEnd = Math.min(helloEnd, q + 2 + u16(f, q));
+        q += 2;
+        while (q + 4 <= extEnd) {
+            int type = u16(f, q);
+            int size = u16(f, q + 2);
+            int data = q + 4;
+            int next = data + size;
+            if (next > extEnd) return "";
+            if (type == 0 && size >= 5) {         // server_name extension
+                int listEnd = Math.min(next, data + 2 + u16(f, data));
+                int n = data + 2;
+                while (n + 3 <= listEnd) {
+                    int nameType = u8(f, n++);
+                    int nameLen = u16(f, n); n += 2;
+                    if (n + nameLen > listEnd) return "";
+                    if (nameType == 0 && nameLen > 0)
+                        return cleanHost(new String(f, n, nameLen,
+                                java.nio.charset.StandardCharsets.US_ASCII));
+                    n += nameLen;
+                }
+            }
+            q = next;
+        }
+        return "";
+    }
+
+    /** DNS question QNAME (first question only); compressed names are rejected. */
+    static String dnsQuestion(byte[] f, int p, int len) {
+        int end = Math.min(f.length, p + len);
+        if (p < 0 || p + 12 > end || u16(f, p + 4) == 0) return "";
+        int q = p + 12;
+        StringBuilder name = new StringBuilder();
+        for (int labels = 0; labels < 127 && q < end; labels++) {
+            int n = u8(f, q++);
+            if (n == 0) return cleanHost(name.toString());
+            if ((n & 0xC0) != 0 || n > 63 || q + n > end) return "";
+            if (name.length() > 0) name.append('.');
+            name.append(new String(f, q, n, java.nio.charset.StandardCharsets.US_ASCII));
+            q += n;
+        }
+        return "";
+    }
+
+    private static String cleanHost(String value) {
+        if (value == null) return "";
+        String host = value.trim().toLowerCase(Locale.US);
+        while (host.endsWith(".")) host = host.substring(0, host.length() - 1);
+        if (host.isEmpty() || host.length() > 253 || host.indexOf(' ') >= 0
+                || host.indexOf('/') >= 0 || host.indexOf('\\\\') >= 0) return "";
+        return host;
     }
 
     // ------------------------------------------------------------- helpers
