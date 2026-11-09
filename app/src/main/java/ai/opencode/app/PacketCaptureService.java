@@ -6,16 +6,20 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.net.ConnectivityManager;
 import android.net.VpnService;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.Build;
 import android.os.ParcelFileDescriptor;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -53,6 +57,7 @@ public class PacketCaptureService extends VpnService {
     private static volatile Handler uiHandler;
     /** Last failure reason, surfaced by the activity ("VPN permission denied"…). */
     public static volatile String lastError;
+    public static volatile String lastSavedCapturePath;
 
     private static final List<Packet> packets =
             Collections.synchronizedList(new ArrayList<>());
@@ -67,8 +72,10 @@ public class PacketCaptureService extends VpnService {
 
     /** Write the current capture to a pcap file openable in Wireshark. */
     public static File exportPcap(Context c) throws IOException {
-        File dir = new File(c.getCacheDir(), "captures");
-        return PcapWriter.writeToDir(dir, PcapWriter.defaultName(), snapshot());
+        File dir = new File(c.getFilesDir(), "captures");
+        File saved = PcapWriter.writeToDir(dir, PcapWriter.defaultName(), snapshot());
+        lastSavedCapturePath = saved.getAbsolutePath();
+        return saved;
     }
 
     private static volatile boolean running;
@@ -121,6 +128,9 @@ public class PacketCaptureService extends VpnService {
             // Capture IPv6 too (modern networks are IPv6-heavy); read-only.
             b.addAddress("fd00:1:fd00:1::1", 64);
             b.addRoute("::", 0);
+            // Safety boundary: do not route every app into this read-only VPN.
+            // Only OpenCode is captured; other apps retain their normal network.
+            b.addAllowedApplication(getPackageName());
             vpnFd = b.establish();
         } catch (Exception e) {
             lastError = String.valueOf(e);
@@ -155,8 +165,9 @@ public class PacketCaptureService extends VpnService {
                 if (n <= 0) break;
                 byte[] frame = new byte[n];
                 System.arraycopy(buf, 0, frame, 0, n);
-                final Packet p = PacketParser.parse(System.currentTimeMillis(), frame);
+                Packet p = PacketParser.parse(System.currentTimeMillis(), frame);
                 if (p == null) continue;
+                p = attributeOwner(p);
                 synchronized (packets) {
                     if (packets.size() >= MAX_PACKETS) packets.remove(0);
                     packets.add(p);
@@ -172,6 +183,50 @@ public class PacketCaptureService extends VpnService {
             try { if (vpnFd != null) vpnFd.close(); } catch (Exception ignored) {}
             vpnFd = null;
             running = false;
+            if (!snapshot().isEmpty()) {
+                try {
+                    File saved = PcapWriter.writeToDir(new File(getFilesDir(), "captures"),
+                            PcapWriter.defaultName(), snapshot());
+                    lastSavedCapturePath = saved.getAbsolutePath();
+                } catch (IOException e) {
+                    lastError = "capture save failed: " + e;
+                }
+            }
+        }
+    }
+
+    /** Best-effort Android socket-owner lookup; unavailable on API 28 and for
+     *  fragmented/non-TCP/UDP flows. It never guesses an application. */
+    private Packet attributeOwner(Packet packet) {
+        if (Build.VERSION.SDK_INT < 29 || packet.srcPort < 0 || packet.dstPort < 0)
+            return packet;
+        int protocol = "TCP".equals(packet.proto) ? 6
+                : "UDP".equals(packet.proto) ? 17 : -1;
+        if (protocol < 0) return packet;
+        try {
+            ConnectivityManager cm = (ConnectivityManager)
+                    getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return packet;
+            InetSocketAddress src = new InetSocketAddress(
+                    InetAddress.getByName(packet.srcIp), packet.srcPort);
+            InetSocketAddress dst = new InetSocketAddress(
+                    InetAddress.getByName(packet.dstIp), packet.dstPort);
+            int uid = cm.getConnectionOwnerUid(protocol, src, dst);
+            if (uid < 0) uid = cm.getConnectionOwnerUid(protocol, dst, src);
+            if (uid < 0) return packet;
+            String[] packages = getPackageManager().getPackagesForUid(uid);
+            String names = "";
+            if (packages != null) {
+                StringBuilder b = new StringBuilder();
+                for (String name : packages) {
+                    if (b.length() > 0) b.append(',');
+                    b.append(name);
+                }
+                names = b.toString();
+            }
+            return packet.withOwner(uid, names);
+        } catch (Exception ignored) {
+            return packet;
         }
     }
 
