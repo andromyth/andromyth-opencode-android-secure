@@ -740,8 +740,13 @@ public final class Debian {
             String px = "http://127.0.0.1:" + pp;
             e.put("http_proxy", px);  e.put("https_proxy", px);
             e.put("HTTP_PROXY", px);  e.put("HTTPS_PROXY", px);
-            e.put("no_proxy", "127.0.0.1,localhost,::1");
-            e.put("NO_PROXY", "127.0.0.1,localhost,::1");
+            boolean lanDirect = c.getSharedPreferences("oc", Context.MODE_PRIVATE)
+                    .getBoolean("lan_direct", true);
+            String no = lanDirect
+                    ? "127.0.0.1,localhost,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16"
+                    : "127.0.0.1,localhost,::1";
+            e.put("no_proxy", no);
+            e.put("NO_PROXY", no);
         }
         e.put("DEBIAN_FRONTEND", "noninteractive");
         e.put("HOME", "/root");
@@ -853,8 +858,14 @@ public final class Debian {
                  .append("https_proxy=\"").append(px).append("\"\n")
                  .append("HTTP_PROXY=\"").append(px).append("\"\n")
                  .append("HTTPS_PROXY=\"").append(px).append("\"\n")
-                 .append("no_proxy=\"127.0.0.1,localhost,::1\"\n")
-                 .append("NO_PROXY=\"127.0.0.1,localhost,::1\"\n")
+                 .append("no_proxy=\"").append(c.getSharedPreferences("oc", Context.MODE_PRIVATE)
+                         .getBoolean("lan_direct", true)
+                         ? "127.0.0.1,localhost,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16"
+                         : "127.0.0.1,localhost,::1").append("\"\n")
+                 .append("NO_PROXY=\"").append(c.getSharedPreferences("oc", Context.MODE_PRIVATE)
+                         .getBoolean("lan_direct", true)
+                         ? "127.0.0.1,localhost,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16"
+                         : "127.0.0.1,localhost,::1").append("\"\n")
                  .append("export http_proxy https_proxy HTTP_PROXY HTTPS_PROXY")
                  .append(" no_proxy NO_PROXY\n");
             }
