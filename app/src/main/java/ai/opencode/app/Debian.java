@@ -778,8 +778,7 @@ public final class Debian {
         return "[credential \"https://github.com\"]\n"
              + "\thelper = !f() {\\n"
              + "[ \"$1\" = get ] || return 0\\n"
-             + "echo username=x-access-token\\n"
-             + "echo \"password=$GH_TOKEN\"\\n"
+             + "printf 'username=x-access-token\\npassword=%s\\n' \"$GH_TOKEN\"\\n"
              + "}\\nf\n";
     }
 
