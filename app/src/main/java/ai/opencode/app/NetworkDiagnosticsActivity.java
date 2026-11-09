@@ -7,6 +7,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.graphics.drawable.GradientDrawable;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
@@ -94,7 +95,10 @@ public final class NetworkDiagnosticsActivity extends Activity {
         v.setTextColor(Theme.TXT);
         v.setPadding(Theme.dp(this, 14), Theme.dp(this, 13),
                 Theme.dp(this, 14), Theme.dp(this, 13));
-        v.setBackground(Theme.card(this));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Theme.cr(this, R.color.card));
+        bg.setCornerRadius(Theme.dp(this, 12));
+        v.setBackground(bg);
         v.setOnClickListener(listener);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
