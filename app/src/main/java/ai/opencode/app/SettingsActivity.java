@@ -218,6 +218,10 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
                 "kernel · user · os · tools · storage · project bind",
                 "ⓘ", v -> runEnvCheck()));
         env.addView(divider());
+        env.addView(rowLink("Network & LAN diagnostics",
+                "Wi-Fi AP scan · mDNS discovery · DNS servers · interfaces",
+                "⌁", v -> startActivity(new Intent(this, NetworkDiagnosticsActivity.class))));
+        env.addView(divider());
         env.addView(rowLink("Why two environments?",
                 "Lite (Alpine) always works · Debian adds real apt — the\n"
                         + "installer probes proot and falls back automatically",
