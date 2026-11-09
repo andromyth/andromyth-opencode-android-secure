@@ -73,7 +73,7 @@ public class PacketCaptureService extends VpnService {
     /** Write the current capture to a pcap file openable in Wireshark. */
     public static File exportPcap(Context c) throws IOException {
         File dir = new File(c.getFilesDir(), "captures");
-        File saved = PcapWriter.writeToDir(dir, PcapWriter.defaultName(), snapshot());
+        File saved = PcapWriter.writeToDir(dir, captureFileName(), snapshot());
         lastSavedCapturePath = saved.getAbsolutePath();
         return saved;
     }
@@ -186,13 +186,18 @@ public class PacketCaptureService extends VpnService {
             if (!snapshot().isEmpty()) {
                 try {
                     File saved = PcapWriter.writeToDir(new File(getFilesDir(), "captures"),
-                            PcapWriter.defaultName(), snapshot());
+                            captureFileName(), snapshot());
                     lastSavedCapturePath = saved.getAbsolutePath();
                 } catch (IOException e) {
                     lastError = "capture save failed: " + e;
                 }
             }
         }
+    }
+
+    private static String captureFileName() {
+        return "capture-" + new java.text.SimpleDateFormat("yyyyMMdd-HHmmss-SSS",
+                java.util.Locale.US).format(new java.util.Date()) + ".pcap";
     }
 
     /** Best-effort Android socket-owner lookup; unavailable on API 28 and for
