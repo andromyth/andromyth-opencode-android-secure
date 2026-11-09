@@ -25,7 +25,8 @@ cap_has() {
     digit = tolower(substr(mask, pos, 1))
     nibble = index("0123456789abcdef", digit) - 1
     if (nibble < 0) exit 1
-    exit (int(nibble / (2 ^ (bit % 4))) % 2) ? 0 : 1
+    if (int(nibble / (2 ^ (bit % 4))) % 2) exit 0
+    exit 1
   }'
 }
 for item in "CAP_NET_BIND_SERVICE:10" "CAP_NET_ADMIN:12" "CAP_NET_RAW:13"; do
