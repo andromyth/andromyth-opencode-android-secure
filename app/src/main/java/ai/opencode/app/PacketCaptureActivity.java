@@ -267,7 +267,10 @@ public class PacketCaptureActivity extends Activity implements PacketCaptureServ
         for (int i = list.size() - 1; i >= 0 && shown < 200; i--) {
             Packet p = list.get(i);
             if (!matches(p)) continue;
-            b.append(ago(p.timeMs)).append("  ").append(p.summary).append("\n");
+            b.append(ago(p.timeMs)).append("  ").append(p.summary);
+            if (!p.ownerPackages.isEmpty()) b.append("  app=").append(p.ownerPackages);
+            else if (p.ownerUid >= 0) b.append("  uid=").append(p.ownerUid);
+            b.append("\n");
             shown++;
         }
         if (shown == 0 && !list.isEmpty()) b.append("(no packets match the “")
