@@ -246,8 +246,11 @@ public class ChatActivity extends Activity
     private static final class PendingImg {
         final File file;
         final int w, h;
-        PendingImg(File file, int w, int h) {
+        final String name, mime;
+        final boolean image;
+        PendingImg(File file, int w, int h, String name, String mime, boolean image) {
             this.file = file; this.w = w; this.h = h;
+            this.name = name; this.mime = mime; this.image = image;
         }
     }
     private final List<PendingImg> pendingAttach = new ArrayList<>();
@@ -390,11 +393,12 @@ public class ChatActivity extends Activity
                 Theme.pop(btnSend);          // P8 micro-anim: the send button springs
                 if (!pendingAttach.isEmpty()) {
                     List<PendingImg> ship = new ArrayList<>(pendingAttach);
-                    List<File> files = new ArrayList<>();
-                    for (PendingImg p : ship) files.add(p.file);
+                    List<RunHub.FilePart> files = new ArrayList<>();
+                    for (PendingImg p : ship)
+                        files.add(new RunHub.FilePart(p.file, p.mime, p.name));
                     clearAttach(false);      // tray clears; files live on for the hub
                     input.setText("");
-                    RunHub.sendWithAttachments(files, q);   // P29: ONE message, N images
+                    RunHub.sendWithFiles(files, q);
                 } else {
                     input.setText("");
                     RunHub.send(q);          // hub-owned: the run outlives this screen
@@ -2136,34 +2140,76 @@ public class ChatActivity extends Activity
 
     private void pickImage() {
         try {
-            Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
             i.addCategory(Intent.CATEGORY_OPENABLE);
-            i.setType("image/*");
-            i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);   // the whole point
+            i.setType("*/*");
+            i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             startActivityForResult(
-                    Intent.createChooser(i, "Attach images"), REQ_IMAGE);
+                    Intent.createChooser(i, "Attach files"), REQ_IMAGE);
         } catch (Exception e) {
-            Toast.makeText(this, "no image picker available", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "no file picker available", Toast.LENGTH_SHORT).show();
         }
     }
 
-    /**
-     * P29 tray intake: every picked Uri downscales off-thread, decodes its
-     * REAL post-downscale dims (the cost estimate uses actual pixels, not
-     * a guess), then joins the tray. Failures degrade to one sys line per
-     * bad image — the rest of the batch still lands.
-     */
+    /** Copy the provider Uri into app cache immediately; no long-lived
+     *  storage permission is needed and cloud/document providers work too. */
     private void addAttachFromUri(final Uri uri) {
         ex.execute(() -> {
+            File copy = null;
             try {
-                final File jpg = Vision.downscale(this, uri);
-                BitmapFactory.Options o = new BitmapFactory.Options();
-                o.inJustDecodeBounds = true;
-                BitmapFactory.decodeFile(jpg.getAbsolutePath(), o);
-                final int w = Math.max(1, o.outWidth), h = Math.max(1, o.outHeight);
-                ui.post(() -> addAttach(new PendingImg(jpg, w, h)));
+                String mime = getContentResolver().getType(uri);
+                if (mime == null || mime.trim().isEmpty()) mime = "application/octet-stream";
+                String name = "attachment";
+                android.database.Cursor cur = getContentResolver().query(
+                        uri, new String[]{android.provider.OpenableColumns.DISPLAY_NAME},
+                        null, null, null);
+                if (cur != null) {
+                    try {
+                        if (cur.moveToFirst()) {
+                            int ix = cur.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                            if (ix >= 0 && cur.getString(ix) != null) name = cur.getString(ix);
+                        }
+                    } finally { cur.close(); }
+                }
+                boolean image = mime.toLowerCase(Locale.US).startsWith("image/");
+                if (image) {
+                    copy = Vision.downscale(this, uri);
+                    BitmapFactory.Options o = new BitmapFactory.Options();
+                    o.inJustDecodeBounds = true;
+                    BitmapFactory.decodeFile(copy.getAbsolutePath(), o);
+                    final PendingImg p = new PendingImg(copy,
+                            Math.max(1, o.outWidth), Math.max(1, o.outHeight),
+                            name, "image/jpeg", true);
+                    ui.post(() -> addAttach(p));
+                    return;
+                }
+
+                String suffix = ".bin";
+                int dot = name.lastIndexOf('.');
+                if (dot >= 0 && dot < name.length() - 1) {
+                    String ext = name.substring(dot).replaceAll("[^A-Za-z0-9.]", "");
+                    if (ext.length() > 1 && ext.length() <= 10) suffix = ext;
+                }
+                copy = File.createTempFile("oc-attach-", suffix, getCacheDir());
+                long total = 0;
+                try (java.io.InputStream in = getContentResolver().openInputStream(uri);
+                     OutputStream out = new FileOutputStream(copy)) {
+                    if (in == null) throw new IOException("provider returned no stream");
+                    byte[] buf = new byte[32 * 1024];
+                    int n;
+                    while ((n = in.read(buf)) != -1) {
+                        total += n;
+                        if (total > 20L * 1024L * 1024L)
+                            throw new IOException("file exceeds 20 MB attachment limit");
+                        out.write(buf, 0, n);
+                    }
+                }
+                final PendingImg p = new PendingImg(copy, 0, 0, name, mime, false);
+                ui.post(() -> addAttach(p));
             } catch (Exception e) {
-                ui.post(() -> sys("could not read that image: " + e.getMessage()));
+                if (copy != null) copy.delete();
+                ui.post(() -> sys("could not read that file: " + e.getMessage()));
             }
         });
     }
@@ -2199,19 +2245,32 @@ public class ChatActivity extends Activity
             lp.rightMargin = dp(8);
             chip.setLayoutParams(lp);
 
-            ImageView iv = new ImageView(this);
-            Bitmap bm = attachThumbs.get(p.file.getAbsolutePath());
-            if (bm == null) {
-                bm = Vision.decodeBounded(p.file.getAbsolutePath(), 128);
-                if (bm != null) attachThumbs.put(p.file.getAbsolutePath(), bm);
+            if (p.image) {
+                ImageView iv = new ImageView(this);
+                Bitmap bm = attachThumbs.get(p.file.getAbsolutePath());
+                if (bm == null) {
+                    bm = Vision.decodeBounded(p.file.getAbsolutePath(), 128);
+                    if (bm != null) attachThumbs.put(p.file.getAbsolutePath(), bm);
+                }
+                if (bm != null) iv.setImageBitmap(bm);
+                else iv.setImageResource(android.R.drawable.ic_menu_report_image);
+                iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                iv.setBackground(Theme.codeWell(this));
+                chip.addView(iv, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT));
+            } else {
+                TextView file = new TextView(this);
+                file.setText(p.name.length() > 12 ? p.name.substring(0, 10) + "…" : p.name);
+                file.setTextSize(10);
+                file.setTextColor(Theme.TXT);
+                file.setGravity(Gravity.CENTER);
+                file.setMaxLines(3);
+                file.setBackground(Theme.codeWell(this));
+                chip.addView(file, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT));
             }
-            if (bm != null) iv.setImageBitmap(bm);
-            else iv.setImageResource(android.R.drawable.ic_menu_report_image);
-            iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            iv.setBackground(Theme.codeWell(this));
-            chip.addView(iv, new FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT));
 
             // the ✕ badge — the field's exact ask ("appear above chat with
             // a cross sign so i can remove them")
