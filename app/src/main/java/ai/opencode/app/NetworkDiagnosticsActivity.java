@@ -32,7 +32,7 @@ import java.util.List;
 public final class NetworkDiagnosticsActivity extends Activity {
     private static final int REQ_LOCATION = 7401;
     private static final String[] MDNS_TYPES = {
-            "_adb-tls-pairing._tcp.", "_adb._tcp.", "_googlecast._tcp.",
+            "_adb-tls-pairing._tcp.", "_adb-tls-connect._tcp.", "_adb._tcp.", "_googlecast._tcp.",
             "_ipp._tcp.", "_printer._tcp."
     };
 
@@ -225,6 +225,15 @@ public final class NetworkDiagnosticsActivity extends Activity {
                 }
                 @Override public void onServiceFound(NsdServiceInfo service) {
                     line("mDNS found: " + service.getServiceName() + " · " + service.getServiceType());
+                    nsd.resolveService(service, new NsdManager.ResolveListener() {
+                        @Override public void onResolveFailed(NsdServiceInfo info, int errorCode) {
+                            line("mDNS resolve failed: " + info.getServiceName() + " · " + errorCode);
+                        }
+                        @Override public void onServiceResolved(NsdServiceInfo info) {
+                            String host = info.getHost() == null ? "?" : info.getHost().getHostAddress();
+                            line("  endpoint: " + host + ":" + info.getPort());
+                        }
+                    });
                 }
                 @Override public void onServiceLost(NsdServiceInfo service) {
                     line("mDNS lost: " + service.getServiceName());
