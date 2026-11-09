@@ -145,7 +145,7 @@ public class PacketCaptureTest {
     }
 
     @Test public void httpHostHeaderIsExtracted() {
-        byte[] payload = "GET / HTTP/1.1\\r\\nHost: Example.COM:8080\\r\\n\\r\\n"
+        byte[] payload = "GET / HTTP/1.1\r\nHost: Example.COM:8080\r\n\r\n"
                 .getBytes(java.nio.charset.StandardCharsets.US_ASCII);
         Packet p = PacketParser.parse(1500L, ipv4Tcp(payload, 50000, 80, 0x18));
         assertNotNull(p);
