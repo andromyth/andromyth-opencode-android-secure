@@ -77,6 +77,13 @@ jobs:
             STORE_PASS="$ANDROID_SIGNING_STORE_PASSWORD"
             KEY_ALIAS="$ANDROID_SIGNING_KEY_ALIAS"
             KEY_PASS="$ANDROID_SIGNING_KEY_PASSWORD"
+          elif [ -f keystore/opencode-signing.p12 ]; then
+            # Deterministic sideload key committed to this repo: CI and local
+            # builds share it, so updates install in place without uninstall.
+            STORE="$PWD/keystore/opencode-signing.p12"
+            STORE_PASS="opencode-signing"
+            KEY_ALIAS="opencode"
+            KEY_PASS="opencode-signing"
           else
             STORE_PASS="$(openssl rand -hex 32)"
             KEY_PASS="$STORE_PASS"

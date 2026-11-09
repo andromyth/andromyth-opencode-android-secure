@@ -75,20 +75,22 @@ public class PacketCaptureService extends VpnService {
         if (running) return;
         running = true;
         uiHandler = new Handler(Looper.getMainLooper());
+        HandlerThread workerThread = new HandlerThread("oc-pcap");
         try {
-            // establish() must run on the main thread (onStartCommand is main).
-            Builder b = new Builder(this);
+            // VpnService.Builder() takes no context and establish() lives on
+            // the builder; both must run on the main thread (onStartCommand).
+            Builder b = new Builder();
             b.setSession("OpenCode packet capture");
             b.addAddress("10.254.254.1", 24);
             b.addRoute("0.0.0.0", 0);
-            vpnFd = establish();
+            vpnFd = b.establish();
         } catch (Exception e) {
             running = false;
             return;
         }
-        worker = new HandlerThread("oc-pcap");
+        worker = workerThread;
         worker.start();
-        worker.getLooper().post(this::runTunnel);
+        new Handler(worker.getLooper()).post(this::runTunnel);
     }
 
     private void stopCapture() {

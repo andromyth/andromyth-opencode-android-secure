@@ -91,24 +91,24 @@ public final class Json {
 
     private static Object readValue(JsonReader r) throws IOException {
         switch (r.peek()) {
-            case JsonReader.BEGIN_OBJECT: {
+            case BEGIN_OBJECT: {
                 Map<String, Object> m = new LinkedHashMap<>();
                 r.beginObject();
                 while (r.hasNext()) m.put(r.nextName(), readValue(r));
                 r.endObject();
                 return m;
             }
-            case JsonReader.BEGIN_ARRAY: {
+            case BEGIN_ARRAY: {
                 List<Object> l = new ArrayList<>();
                 r.beginArray();
                 while (r.hasNext()) l.add(readValue(r));
                 r.endArray();
                 return l;
             }
-            case JsonReader.STRING:  return r.nextString();
-            case JsonReader.BOOLEAN: return r.nextBoolean();
-            case JsonReader.NULL:    r.nextNull(); return null;
-            case JsonReader.NUMBER:  return r.nextDouble();
+            case STRING:  return r.nextString();
+            case BOOLEAN: return r.nextBoolean();
+            case NULL:    r.nextNull(); return null;
+            case NUMBER:  return r.nextDouble();
             default:                 r.skipValue(); return null;
         }
     }

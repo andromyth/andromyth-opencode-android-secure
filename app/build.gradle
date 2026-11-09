@@ -1,11 +1,24 @@
 plugins { id 'com.android.application' }
 
-// Never use a signing key committed to source control.
+// Signing identity.
+//
+// Deterministic signing is REQUIRED for updates to install in place: Android
+// refuses to replace an installed package unless the new APK is signed with
+// the SAME key. A fresh key per build (the old CI fallback) forced an
+// uninstall, which wipes app data. Priority:
+//   1. CI secrets (OPENCODE_SIGNING_*) — recommended for a private key.
+//   2. The committed keystore keystore/opencode-signing.p12 — deterministic
+//      sideload signing shared by every local and CI build.
+//   3. Nothing — the build is left unsigned and will NOT update in place.
 def ciStore = System.getenv('OPENCODE_SIGNING_KEYSTORE')
 def ciStorePassword = System.getenv('OPENCODE_SIGNING_STORE_PASSWORD')
 def ciAlias = System.getenv('OPENCODE_SIGNING_KEY_ALIAS')
 def ciKeyPassword = System.getenv('OPENCODE_SIGNING_KEY_PASSWORD')
 def ciSigningReady = ciStore && ciStorePassword && ciAlias && ciKeyPassword
+
+def localStore = rootProject.file('keystore/opencode-signing.p12')
+def localReady = localStore.exists()
+def signingReady = ciSigningReady || localReady
 
 android {
     namespace 'ai.opencode.app'
@@ -19,28 +32,33 @@ android {
         // would move us into the W^X-restricted SELinux domain and break
         // exec() of the opencode binary from app-private storage.
         targetSdk 28
-        versionCode 61
-        versionName '0.52.0-p59'
+        versionCode 62
+        versionName '0.52.0-p60'
     }
 
     signingConfigs {
-        if (ciSigningReady) {
-            hardened {
+        stable {
+            if (ciSigningReady) {
                 storeFile file(ciStore)
                 storePassword ciStorePassword
                 keyAlias ciAlias
                 keyPassword ciKeyPassword
+            } else if (localReady) {
+                storeFile localStore
+                storePassword 'opencode-signing'
+                keyAlias 'opencode'
+                keyPassword 'opencode-signing'
             }
         }
     }
 
     buildTypes {
         debug {
-            if (ciSigningReady) signingConfig signingConfigs.hardened
+            if (signingReady) signingConfig signingConfigs.stable
         }
         release {
             minifyEnabled false
-            if (ciSigningReady) signingConfig signingConfigs.hardened
+            if (signingReady) signingConfig signingConfigs.stable
         }
     }
 
