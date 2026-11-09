@@ -35,7 +35,7 @@ public class DiagnosticsActivity extends Activity {
     private static final int REQ_IMPORT = 51;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private TextView tvLog, tvBin, tvProxy, tvShellOut, tvBinDir;
+    private TextView tvLog, tvBin, tvProxy, tvShellOut, tvBinDir, tvCapture;
     private boolean running = true;
 
     private final Runnable refresher = new Runnable() {
@@ -43,6 +43,7 @@ public class DiagnosticsActivity extends Activity {
             if (!running) return;
             tvLog.setText(ServerService.getTail());
             tvProxy.setText(proxyText());
+            if (tvCapture != null) tvCapture.setText(captureText());
             ui.postDelayed(this, 2000);
         }
     };
@@ -199,6 +200,20 @@ public class DiagnosticsActivity extends Activity {
                 + "setups: it runs a local CONNECT proxy and routes the agent's "
                 + "traffic through it. Leave OFF unless provider calls fail with "
                 + "DNS errors."));
+
+        root.addView(section("network capture — no root"));
+        tvCapture = monoText();
+        root.addView(tvCapture);
+        TextView capture = chip("Open capture");
+        capture.setOnClickListener(v -> startActivity(
+                new Intent(this, CaptureActivity.class)));
+        root.addView(capture);
+        root.addView(note("A local VpnService asks the system for its DNS "
+                + "queries, forwards them upstream and records the names. No "
+                + "packets of other devices are visible this way — Android "
+                + "does not let an app capture the LAN. On this device it "
+                + "sees every app that uses the system resolver; Private "
+                + "DNS/DoH and hard-coded resolvers are not covered."));
 
         root.addView(section("agent binary"));
         tvBin = monoText();
@@ -392,6 +407,21 @@ public class DiagnosticsActivity extends Activity {
         sb.append(" · connections: ").append(ProxyServer.connections());
         String errs = ProxyServer.errors();
         if (!errs.isEmpty()) sb.append("\n---- last events ----\n").append(errs);
+        return sb.toString();
+    }
+
+    private String captureText() {
+        if (!CaptureService.running()) {
+            String e = CaptureService.lastError();
+            return "○ off" + (e == null || e.isEmpty() ? "" : " · " + e);
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("● capturing · ").append(CaptureStore.total())
+          .append(" queries · ").append(CaptureStore.size()).append(" domains\n");
+        java.util.List<CaptureStore.D> recent = CaptureStore.snapshot();
+        for (int i = 0; i < Math.min(6, recent.size()); i++) {
+            sb.append(recent.get(i).name).append('\n');
+        }
         return sb.toString();
     }
 
