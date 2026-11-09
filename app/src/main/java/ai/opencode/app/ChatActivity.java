@@ -2877,18 +2877,24 @@ public class ChatActivity extends Activity
     private View buildRowView(RunHub.Row r) {
         switch (r.kind) {
             case K_USER: {
-                LinearLayout wrap = new LinearLayout(this);
-                wrap.setOrientation(LinearLayout.HORIZONTAL);
+                // P62: the user's own command — hard-right in a light-blue
+                // rimmed pill with light-yellow ink, so it can never be
+                // confused with the agent's grey output. The FrameLayout is
+                // MATCH_PARENT and the child is END-gravity, which right-aligns
+                // even when the transcript row itself is laid out WRAP_CONTENT.
+                FrameLayout wrap = new FrameLayout(this);
+                wrap.setLayoutParams(new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
                 TextView tv = text(15, R.color.user_text, false);
-                // P45: the Claude-Android bubble — fully rounded neutral
-                // graphite pill (no tail, no accent shout), right-aligned.
+                tv.setTextColor(Theme.USER_TXT);
                 tv.setBackground(Theme.userBubble(this));
                 int p = dp(14);
                 tv.setPadding(p, dp(10), p, dp(10));
                 tv.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.78));
                 tv.setText(r.text.toString());
                 tv.setTextIsSelectable(true);
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT);
                 lp.gravity = Gravity.END;

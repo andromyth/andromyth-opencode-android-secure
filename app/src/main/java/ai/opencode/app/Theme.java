@@ -82,6 +82,11 @@ public final class Theme {
     public static int ON_CARD    = 0xCCFFFFFF;   // text on a gradient card
     public static int RIPPLE     = 0x22FFFFFF;   // ripple mask
     public static boolean LIGHT  = false;        // paper flag (status bar icons)
+    // P62: the user's OWN message — warm light-yellow ink inside a light-blue
+    // rim, so a typed command reads differently from the agent's grey output
+    // at a glance (and sits hard-right, never mistaken for a reply).
+    public static int USER_TXT   = 0xFFFFE39B;   // light yellow
+    public static int USER_RIM   = 0xFFA8D4FF;   // light blue
 
 
     // ---------------------------------------------------- P31 palettes ----
@@ -259,6 +264,10 @@ public final class Theme {
         RIM_USER = p[18]; ICON_DISC = p[19]; DOT_IDLE = p[20]; ON_CARD = p[21];
         RIPPLE = p[22];
         LIGHT = "paper".equals(id);
+        // P62: keep the user-message pair legible on the one light palette;
+        // on the dark palettes it is the requested light-yellow/light-blue.
+        USER_TXT = LIGHT ? 0xFF8A6400 : 0xFFFFE39B;
+        USER_RIM = LIGHT ? 0xFF5B8FD6 : 0xFFA8D4FF;
         currentIdStatic = id;
         CARD_GRADS = GRAD_DATA[paletteIndex(id)];
         Markdown.setLinkColor(ACCENT_LT);
@@ -768,13 +777,14 @@ public final class Theme {
 
     /** User bubble — the P45 Claude-Android shape: a FULLY rounded
      *  (22dp, no tail) soft neutral surface with a hairline rim, the
-     *  quiet messenger look — the user's words sit in a calm graphite
-     *  pill, never an accent shout. Palette-owned end to end. */
+     *  quiet messenger look. P62: the rim is LIGHT BLUE (and the ink
+     *  inside light yellow) so the user's own command is immediately
+     *  distinguishable from the agent's grey output. */
     public static GradientDrawable userBubble(Context c) {
         GradientDrawable d = new GradientDrawable();
         d.setColor(SURFACE2);
         d.setCornerRadius(dp(c, 22));
-        d.setStroke(dp(c, 1), STROKE);
+        d.setStroke(dp(c, 1), USER_RIM);
         return d;
     }
 
