@@ -19,11 +19,13 @@ fi
 printf 'CapEff: %s\n' "${cap_eff:-unreadable}"
 cap_has() {
   [ -n "$cap_eff" ] || return 1
-  # awk handles the hexadecimal capability mask without shell arithmetic overflow.
+  # Read the relevant hexadecimal nibble; POSIX awk has no portable bitwise ops.
   awk -v mask="$cap_eff" -v bit="$1" 'BEGIN {
-    value = ("0x" mask) + 0
-    divisor = 2 ^ bit
-    exit (int(value / divisor) % 2) ? 0 : 1
+    pos = length(mask) - int(bit / 4)
+    digit = tolower(substr(mask, pos, 1))
+    nibble = index("0123456789abcdef", digit) - 1
+    if (nibble < 0) exit 1
+    exit (int(nibble / (2 ^ (bit % 4))) % 2) ? 0 : 1
   }'
 }
 for item in "CAP_NET_BIND_SERVICE:10" "CAP_NET_ADMIN:12" "CAP_NET_RAW:13"; do
