@@ -3193,20 +3193,20 @@ public final class RunHub implements ServerService.EventListener {
     static List<String> buildMultiFileBodies(String caption, List<String> dataUrls,
             List<String> mimes, List<String> filenames, String[] sel, String agentMode) {
         LinkedHashMap<String, String> variants = new LinkedHashMap<>();
-        String text = "{\\"type\\":\\"text\\",\\"text\\":" + Json.quote(caption) + "}";
+        String text = "{\"type\":\"text\",\"text\":" + Json.quote(caption) + "}";
         StringBuilder parts = new StringBuilder(text);
         for (int i = 0; i < dataUrls.size(); i++) {
             String mime = mimes.get(i) == null ? "application/octet-stream" : mimes.get(i);
-            parts.append(",{\\"type\\":\\"file\\",\\"mime\\":")
-                 .append(Json.quote(mime)).append(",\\"filename\\":")
-                 .append(Json.quote(filenames.get(i))).append(",\\"url\\":")
+            parts.append(",{\"type\":\"file\",\"mime\":")
+                 .append(Json.quote(mime)).append(",\"filename\":")
+                 .append(Json.quote(filenames.get(i))).append(",\"url\":")
                  .append(Json.quote(dataUrls.get(i))).append('}');
         }
         String model = sel == null ? null
-                : "\\"model\\":{\\"providerID\\":" + Json.quote(sel[0])
-                + ",\\"modelID\\":" + Json.quote(sel[1]) + "}";
-        String ag = "\\"agent\\":" + Json.quote(agentMode);
-        String payload = "\\"parts\\":[" + parts + "]";
+                : "\"model\":{\"providerID\":" + Json.quote(sel[0])
+                + ",\"modelID\":" + Json.quote(sel[1]) + "}";
+        String ag = "\"agent\":" + Json.quote(agentMode);
+        String payload = "\"parts\":[" + parts + "]";
         if (model != null) variants.put("ma", "{" + model + "," + ag + "," + payload + "}");
         if (model != null) variants.put("m", "{" + model + "," + payload + "}");
         variants.put("a", "{" + ag + "," + payload + "}");
