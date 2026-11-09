@@ -377,7 +377,7 @@ public final class PacketParser {
         String host = value.trim().toLowerCase(Locale.US);
         while (host.endsWith(".")) host = host.substring(0, host.length() - 1);
         if (host.isEmpty() || host.length() > 253 || host.indexOf(' ') >= 0
-                || host.indexOf('/') >= 0 || host.indexOf('\\\\') >= 0) return "";
+                || host.indexOf('/') >= 0 || host.indexOf('\\') >= 0) return "";
         return host;
     }
 
