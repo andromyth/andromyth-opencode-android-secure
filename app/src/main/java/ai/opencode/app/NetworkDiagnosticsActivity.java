@@ -96,7 +96,7 @@ public final class NetworkDiagnosticsActivity extends Activity {
         v.setPadding(Theme.dp(this, 14), Theme.dp(this, 13),
                 Theme.dp(this, 14), Theme.dp(this, 13));
         GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Theme.cr(this, R.color.card));
+        bg.setColor(Theme.cr(this, R.color.surface));
         bg.setCornerRadius(Theme.dp(this, 12));
         v.setBackground(bg);
         v.setOnClickListener(listener);
