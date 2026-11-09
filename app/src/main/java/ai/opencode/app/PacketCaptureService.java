@@ -173,8 +173,9 @@ public class PacketCaptureService extends VpnService {
                     packets.add(p);
                 }
                 final Listener l = listener;
+                final Packet capturedPacket = p;
                 if (l != null && uiHandler != null)
-                    uiHandler.post(() -> l.onPacket(p));
+                    uiHandler.post(() -> l.onPacket(capturedPacket));
             }
         } catch (Exception e) {
             lastError = String.valueOf(e);
