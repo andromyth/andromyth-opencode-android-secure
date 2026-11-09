@@ -210,7 +210,7 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
                 "when DNS bridge is ON, proxy-aware HTTP tools bypass the proxy for private IPv4 LAN ranges; does not grant raw sockets or change TCP/UDP routing"));
         sb.addView(divider());
         sb.addView(switchRow("LAN discovery bridge", LanBridge.PREF,
-                "loopback URL the agent can GET for a non-root TCP-connect scan of the local network (hosts + open ports); no ARP/SYN, no packet capture; see ~/.lan-bridge"));
+                "loopback URL the agent can GET for a non-root LAN scan: TCP connect plus mDNS, SSDP/UPnP, NetBIOS and reverse-DNS (hosts, names, services, device type); no ARP/SYN, no packet capture; see ~/.lan-bridge"));
         root.addView(sb);
 
         // ---- environment (P12: Debian 12 + apt via proot)

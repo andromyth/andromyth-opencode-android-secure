@@ -156,13 +156,17 @@ public final class EnvNote {
         if (lanBridge) {
             s.append("LAN discovery: `cat ~/.lan-bridge` holds a 127.0.0.1 ");
             s.append("URL (with a per-install token). GET it with curl (or ");
-            s.append("any HTTP client) for JSON: local IPv4 interfaces and ");
-            s.append("subnets plus the live hosts found by a NON-ROOT ");
-            s.append("TCP-connect scan (open ports included). It cannot do ");
-            s.append("ARP/SYN scans, packet capture, or see hosts that drop ");
-            s.append("every probe — those need root/adb; do not install a ");
-            s.append("scanner to retry. The same JSON lands in ~/.lan-last.json ");
-            s.append("after each scan.\n");
+            s.append("any HTTP client) for JSON: local IPv4/IPv6 interfaces and ");
+            s.append("subnets plus the devices found by NON-ROOT discovery — ");
+            s.append("TCP connect (open ports) merged with mDNS, SSDP/UPnP, ");
+            s.append("NetBIOS and reverse-DNS, with hostnames, services and a ");
+            s.append("best-effort device type. Query params: ports=22,80,8000-8010; ");
+            s.append("profile=quick|common|media|iot; timeout=<ms>; threads=<n>; ");
+            s.append("mdns/ssdp/nbns/dns=0|1. It cannot do ARP/SYN scans, packet ");
+            s.append("capture, or see hosts that answer no probe at all — those ");
+            s.append("need root/adb or the router's DHCP lease list; do not ");
+            s.append("install a scanner to retry. The same JSON lands in ");
+            s.append("~/.lan-last.json after each scan.\n");
         }
         // P42 anti-loop paragraph — the money saver.
         s.append("If an environment probe fails twice, stop probing: ");

@@ -34,8 +34,10 @@ public final class LanScan {
 
     /** Ports worth trying on a typical LAN host. Kept small: every host
      *  costs one connect per port, and the whole scan is bounded by
-     *  MAX_HOSTS below. */
-    public static final int[] DEFAULT_PORTS = {22, 80, 443, 445, 3389, 8080};
+     *  MAX_HOSTS below. 53/139/631/9100 were added after a field scan where
+     *  a router's DNS (53) and printers were the only identifying services. */
+    public static final int[] DEFAULT_PORTS =
+            {22, 53, 80, 139, 443, 445, 631, 3389, 8080, 9100};
 
     /** Per-connect timeout. A dropped SYN costs this long, so keep it short. */
     public static final int DEFAULT_TIMEOUT_MS = 200;

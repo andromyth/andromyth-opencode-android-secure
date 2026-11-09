@@ -27,7 +27,18 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * This intentionally does NOT try to become root or open raw sockets. The
  * scan is the same non-privileged TCP connect scan the diagnostics screen
- * runs; ARP/SYN scanning still needs root/adb.
+ * runs, enriched with mDNS, SSDP/UPnP, NetBIOS and reverse-DNS discovery;
+ * ARP/SYN scanning and packet capture still need root/adb.
+ *
+ * <p>Query parameters (all optional):
+ * <ul>
+ *   <li>{@code ports=22,80,8000-8010} — ports/ranges (capped)</li>
+ *   <li>{@code profile=quick|common|media|iot} — a preset port set</li>
+ *   <li>{@code timeout=<ms>} — per-connect timeout</li>
+ *   <li>{@code threads=<n>} — TCP prober concurrency</li>
+ *   <li>{@code mdns=0|1}, {@code ssdp=0|1}, {@code nbns=0|1},
+ *       {@code dns=0|1} — toggle a discovery engine</li>
+ * </ul>
  */
 public final class LanBridge {
 
@@ -50,6 +61,11 @@ public final class LanBridge {
     private static volatile String lastJson;
     private static volatile long lastAt;
     private static final long CACHE_MS = 5_000;
+    /** Results keyed by their effective scan signature, so a request with
+     *  different ports/flags is never served a stale cached scan. */
+    private static final java.util.Map<String, String> cache = new java.util.HashMap<>();
+    private static final java.util.Map<String, Long> cacheAt = new java.util.HashMap<>();
+    private static final int CACHE_ENTRIES = 16;
 
     private static final AtomicInteger conns = new AtomicInteger();
     private static final int MAX_CONNS = 8;
@@ -197,24 +213,47 @@ public final class LanBridge {
                 return;
             }
 
-            int[] ports = parsePorts(queryParam(query, "ports"));
-            int timeout = parsePositiveInt(queryParam(query, "timeout"),
-                    LanScan.DEFAULT_TIMEOUT_MS);
-            long now = System.currentTimeMillis();
-            String json;
-            if (lastJson != null && now - lastAt < CACHE_MS) {
-                json = lastJson;
+            String portsParam = queryParam(query, "ports");
+            String profileParam = queryParam(query, "profile");
+            int[] ports;
+            if (portsParam != null && !portsParam.trim().isEmpty()) {
+                ports = LanQuery.parsePorts(portsParam);
+            } else if (profileParam != null) {
+                int[] preset = LanQuery.profile(profileParam);
+                ports = preset != null ? preset : LanScan.DEFAULT_PORTS;
             } else {
-                synchronized (scanLock) {
-                    now = System.currentTimeMillis();
-                    if (lastJson == null || now - lastAt >= CACHE_MS) {
-                        json = LanDiscovery.scanJson(ctx, ports, timeout);
-                        lastJson = json;
-                        lastAt = now;
-                        writeLast(ctx, json);
-                    } else {
-                        json = lastJson;
+                ports = LanScan.DEFAULT_PORTS;
+            }
+            int timeout = LanQuery.parsePositiveInt(queryParam(query, "timeout"),
+                    LanScan.DEFAULT_TIMEOUT_MS);
+            LanDiscovery.Options opt = new LanDiscovery.Options();
+            opt.mdns = LanQuery.parseBool(queryParam(query, "mdns"), true);
+            opt.ssdp = LanQuery.parseBool(queryParam(query, "ssdp"), true);
+            opt.nbns = LanQuery.parseBool(queryParam(query, "nbns"), true);
+            opt.dns = LanQuery.parseBool(queryParam(query, "dns"), true);
+            opt.threads = LanQuery.parsePositiveInt(queryParam(query, "threads"),
+                    LanScan.DEFAULT_THREADS);
+
+            String key = signature(ports, timeout, opt);
+            String json;
+            synchronized (scanLock) {
+                long now = System.currentTimeMillis();
+                Long at = cacheAt.get(key);
+                String cached = cache.get(key);
+                if (cached != null && at != null && now - at < CACHE_MS) {
+                    json = cached;
+                } else {
+                    json = LanDiscovery.scanJson(ctx, ports, timeout, opt);
+                    if (cache.size() >= CACHE_ENTRIES) {
+                        cache.clear();
+                        cacheAt.clear();
                     }
+                    long done = System.currentTimeMillis();
+                    cache.put(key, json);
+                    cacheAt.put(key, done);
+                    lastJson = json;
+                    lastAt = done;
+                    writeLast(ctx, json);
                 }
             }
             send(client, 200, "OK", "application/json; charset=utf-8",
@@ -263,31 +302,20 @@ public final class LanBridge {
         return null;
     }
 
-    private static int[] parsePorts(String csv) {
-        if (csv == null || csv.trim().isEmpty()) return LanScan.DEFAULT_PORTS;
-        String[] chunks = csv.split(",");
-        int[] tmp = new int[chunks.length];
-        int n = 0;
-        for (String chunk : chunks) {
-            try {
-                int p = Integer.parseInt(chunk.trim());
-                if (p > 0 && p <= 65535) tmp[n++] = p;
-            } catch (NumberFormatException ignored) {}
+    /** Stable cache key for one effective scan configuration. */
+    private static String signature(int[] ports, int timeout,
+                                    LanDiscovery.Options opt) {
+        StringBuilder b = new StringBuilder(64);
+        if (ports != null) {
+            for (int p : ports) b.append(p).append(',');
         }
-        if (n == 0) return LanScan.DEFAULT_PORTS;
-        int[] out = new int[n];
-        System.arraycopy(tmp, 0, out, 0, n);
-        return out;
-    }
-
-    private static int parsePositiveInt(String s, int fallback) {
-        if (s == null) return fallback;
-        try {
-            int v = Integer.parseInt(s.trim());
-            return v > 0 ? v : fallback;
-        } catch (NumberFormatException e) {
-            return fallback;
-        }
+        b.append('|').append(timeout)
+                .append('|').append(opt.mdns ? 1 : 0)
+                .append(opt.ssdp ? 1 : 0)
+                .append(opt.nbns ? 1 : 0)
+                .append(opt.dns ? 1 : 0)
+                .append('|').append(opt.threads);
+        return b.toString();
     }
 
     private static String readLine(InputStream in) throws IOException {

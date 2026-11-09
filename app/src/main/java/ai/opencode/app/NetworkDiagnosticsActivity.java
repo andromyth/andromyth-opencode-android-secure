@@ -68,14 +68,14 @@ public final class NetworkDiagnosticsActivity extends Activity {
         root.addView(title);
 
         TextView note = new TextView(this);
-        note.setText("Android-native checks plus a non-root TCP-connect LAN scan. No packet capture, ARP/SYN scanning, route changes or privilege escalation.");
+        note.setText("Android-native checks plus a non-root LAN scan: TCP connect with mDNS, SSDP/UPnP, NetBIOS and reverse-DNS discovery. No packet capture, ARP/SYN scanning, route changes or privilege escalation.");
         note.setTextSize(12);
         note.setTextColor(Theme.TXT_DIM);
         root.addView(note);
 
         root.addView(action("Refresh network / DNS", v -> refreshNetwork()));
         root.addView(action("Scan nearby Wi-Fi", v -> startWifiScan()));
-        root.addView(action("Scan LAN hosts (non-root)", v -> scanLanHosts()));
+        root.addView(action("Scan LAN devices (TCP + mDNS/SSDP/NBNS)", v -> scanLanHosts()));
         root.addView(action("Discover LAN services (mDNS)", v -> discoverMdns()));
         root.addView(action("Stop mDNS discovery", v -> stopDiscovery()));
 
@@ -160,7 +160,7 @@ public final class NetworkDiagnosticsActivity extends Activity {
 
     private void scanLanHosts() {
         line("");
-        line("LAN host scan (TCP connect, non-root) — scanning…");
+        line("LAN device scan (TCP + mDNS/SSDP/NBNS, non-root) — scanning…");
         final Context app = getApplicationContext();
         new Thread(() -> {
             String json;
@@ -177,7 +177,7 @@ public final class NetworkDiagnosticsActivity extends Activity {
             runOnUiThread(() -> {
                 line(summary);
                 line("");
-                line("Raw ARP/SYN scans and packet capture need root/adb; not attempted.");
+                line("Discovery used mDNS/SSDP/NetBIOS/reverse-DNS. Raw ARP/SYN scans and packet capture still need root/adb.");
                 if (bridge != null) line("Agent bridge: " + bridge);
             });
         }, "oc-lan-ui-scan").start();
