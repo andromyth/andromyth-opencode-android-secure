@@ -269,7 +269,13 @@ public final class Binaries {
             int pp = ProxyServer.ensureStarted(c);
             if (pp > 0) {
                 String px = "http://127.0.0.1:" + pp;
-                String no = "127.0.0.1,localhost,::1";
+                boolean lanDirect = c.getSharedPreferences("oc", Context.MODE_PRIVATE)
+                        .getBoolean("lan_direct", true);
+                // CIDR NO_PROXY bypass is honored by current curl and several
+                // common HTTP clients; it does not alter raw TCP/UDP routing.
+                String no = lanDirect
+                        ? "127.0.0.1,localhost,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16"
+                        : "127.0.0.1,localhost,::1";
                 e.put("HTTPS_PROXY", px); e.put("https_proxy", px);
                 e.put("HTTP_PROXY", px);  e.put("http_proxy", px);
                 e.put("ALL_PROXY", px);   e.put("all_proxy", px);

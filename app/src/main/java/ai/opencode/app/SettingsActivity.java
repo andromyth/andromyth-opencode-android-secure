@@ -205,6 +205,9 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
         // had no row here, so the documented remedy was unreachable.
         sb.addView(switchRow("DNS bridge", "dns_bridge",
                 "escape hatch for exotic VPN/DNS setups: route the agent through a local proxy — leave OFF unless provider calls fail with DNS errors"));
+        sb.addView(divider());
+        sb.addView(switchRow("Direct LAN access", "lan_direct",
+                "when DNS bridge is ON, proxy-aware HTTP tools bypass the proxy for private IPv4 LAN ranges; does not grant raw sockets or change TCP/UDP routing"));
         root.addView(sb);
 
         // ---- environment (P12: Debian 12 + apt via proot)
@@ -217,6 +220,10 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
         env.addView(rowLink("Environment check",
                 "kernel · user · os · tools · storage · project bind",
                 "ⓘ", v -> runEnvCheck()));
+        env.addView(divider());
+        env.addView(rowLink("Network & LAN diagnostics",
+                "Wi-Fi AP scan · mDNS discovery · DNS servers · interfaces",
+                "⌁", v -> startActivity(new Intent(this, NetworkDiagnosticsActivity.class))));
         env.addView(divider());
         env.addView(rowLink("Why two environments?",
                 "Lite (Alpine) always works · Debian adds real apt — the\n"
