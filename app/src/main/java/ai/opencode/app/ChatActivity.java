@@ -2219,7 +2219,7 @@ public class ChatActivity extends Activity
         if (isFinishing() || isDestroyed()) return;
         if (pendingAttach.size() >= CostMath.MAX_ATTACHMENTS) {
             Toast.makeText(this, "max " + CostMath.MAX_ATTACHMENTS
-                    + " images per message", Toast.LENGTH_SHORT).show();
+                    + " files per message", Toast.LENGTH_SHORT).show();
             p.file.delete();
             return;
         }
