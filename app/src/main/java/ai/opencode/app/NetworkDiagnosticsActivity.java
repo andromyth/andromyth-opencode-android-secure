@@ -68,7 +68,7 @@ public final class NetworkDiagnosticsActivity extends Activity {
         root.addView(title);
 
         TextView note = new TextView(this);
-        note.setText("Android-native checks plus a non-root LAN scan: TCP connect with mDNS, SSDP/UPnP, NetBIOS and reverse-DNS discovery. No packet capture, ARP/SYN scanning, route changes or privilege escalation.");
+        note.setText("Android-native checks plus a non-root LAN scan: TCP connect with mDNS, SSDP/UPnP, NetBIOS and reverse-DNS discovery. Packet dissection is available through a no-root VPN tunnel; ARP/SYN scanning, route changes and privilege escalation are not.");
         note.setTextSize(12);
         note.setTextColor(Theme.TXT_DIM);
         root.addView(note);
@@ -178,7 +178,7 @@ public final class NetworkDiagnosticsActivity extends Activity {
             runOnUiThread(() -> {
                 line(summary);
                 line("");
-                line("Discovery used mDNS/SSDP/NetBIOS/reverse-DNS. Raw ARP/SYN scans and packet capture still need root/adb.");
+                line("Discovery used mDNS/SSDP/NetBIOS/reverse-DNS. Raw ARP/SYN scans still need root/adb; packet capture uses the no-root VPN tunnel.");
                 if (bridge != null) line("Agent bridge: " + bridge);
             });
         }, "oc-lan-ui-scan").start();

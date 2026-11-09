@@ -127,6 +127,7 @@ public class FileProvider extends ContentProvider {
             case "so": case "elf": case "bin": return "application/octet-stream";
             case "svg": return "image/svg+xml";
             case "deb": return "application/vnd.debian.binary-package";
+            case "pcap": case "cap": return "application/vnd.tcpdump.pcap";
             case "sqlite": case "sqlite3": case "db": return "application/x-sqlite3";
             case "ttf": return "font/ttf";
             case "otf": return "font/otf";

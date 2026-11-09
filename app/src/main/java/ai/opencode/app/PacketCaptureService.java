@@ -1,5 +1,10 @@
 package ai.opencode.app;
 
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Context;
 import android.content.Intent;
 import android.net.VpnService;
 import android.os.Handler;
@@ -7,7 +12,10 @@ import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
+
+import java.io.File;
 import java.io.FileInputStream;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -19,17 +27,32 @@ import java.util.List;
  *  <p>Capture is read-only: packets read from the tunnel are dissected and
  *  dropped, not forwarded. While capturing, normal device connectivity is
  *  therefore paused (the tunnel would otherwise tunnel every flow). This is
- *  the deliberate, non-root trade-off for a diagnostics sniffer. */
+ *  the deliberate, non-root trade-off for a diagnostics sniffer.
+ *
+ *  <p>Two things used to stop this from working at all:
+ *  <ul>
+ *   <li>{@link Builder#establish()} can return {@code null} when the VPN
+ *       permission was revoked; the old code dereferenced it on the worker
+ *       thread and died.</li>
+ *   <li>the tun descriptor delivers <b>raw IP</b> packets, not Ethernet
+ *       frames — {@link PacketParser} now handles both.</li>
+ *  </ul>
+ *  The service also runs in the foreground so the OS does not kill the
+ *  capture while the screen is off, and it can export a Wireshark pcap. */
 public class PacketCaptureService extends VpnService {
 
     public static final String ACTION_START = "ai.opencode.app.action.START_CAPTURE";
     public static final String ACTION_STOP = "ai.opencode.app.action.STOP_CAPTURE";
 
     private static final int MAX_PACKETS = 4000;
+    private static final String CHANNEL_ID = "oc-packet-capture";
+    private static final int NOTIFICATION_ID = 7501;
 
     public interface Listener { void onPacket(Packet p); }
     public static volatile Listener listener;
     private static volatile Handler uiHandler;
+    /** Last failure reason, surfaced by the activity ("VPN permission denied"…). */
+    public static volatile String lastError;
 
     private static final List<Packet> packets =
             Collections.synchronizedList(new ArrayList<>());
@@ -41,6 +64,12 @@ public class PacketCaptureService extends VpnService {
     public static int count() { synchronized (packets) { return packets.size(); } }
 
     public static void clear() { synchronized (packets) { packets.clear(); } }
+
+    /** Write the current capture to a pcap file openable in Wireshark. */
+    public static File exportPcap(Context c) throws IOException {
+        File dir = new File(c.getCacheDir(), "captures");
+        return PcapWriter.writeToDir(dir, PcapWriter.defaultName(), snapshot());
+    }
 
     private static volatile boolean running;
     private volatile ParcelFileDescriptor vpnFd;
@@ -74,18 +103,32 @@ public class PacketCaptureService extends VpnService {
     private void startCapture() {
         if (running) return;
         running = true;
+        lastError = null;
         uiHandler = new Handler(Looper.getMainLooper());
+
+        // Keep the capture alive while the screen is off / app backgrounded.
+        try { startForeground(NOTIFICATION_ID, notification()); } catch (Exception ignored) {}
+
         HandlerThread workerThread = new HandlerThread("oc-pcap");
         try {
             // VpnService.Builder() takes no context and establish() lives on
-            // the builder; both must run on the main thread (onStartCommand).
+            // the builder; both must run after the VPN consent was granted.
             Builder b = new Builder();
             b.setSession("OpenCode packet capture");
+            b.setMtu(1500);
             b.addAddress("10.254.254.1", 24);
             b.addRoute("0.0.0.0", 0);
+            // Capture IPv6 too (modern networks are IPv6-heavy); read-only.
+            b.addAddress("fd00:1:fd00:1::1", 64);
+            b.addRoute("::", 0);
             vpnFd = b.establish();
         } catch (Exception e) {
+            lastError = String.valueOf(e);
+        }
+        if (vpnFd == null) {
             running = false;
+            if (lastError == null) lastError = "VPN permission not granted";
+            stopSelf();
             return;
         }
         worker = workerThread;
@@ -101,7 +144,9 @@ public class PacketCaptureService extends VpnService {
     }
 
     private void runTunnel() {
-        FileInputStream in = new FileInputStream(vpnFd.getFileDescriptor());
+        ParcelFileDescriptor fd = vpnFd;
+        if (fd == null) { running = false; return; }
+        FileInputStream in = new FileInputStream(fd.getFileDescriptor());
         byte[] buf = new byte[65536];
         try {
             while (running) {
@@ -116,16 +161,38 @@ public class PacketCaptureService extends VpnService {
                     if (packets.size() >= MAX_PACKETS) packets.remove(0);
                     packets.add(p);
                 }
-                final Packet pp = p;
                 final Listener l = listener;
                 if (l != null && uiHandler != null)
-                    uiHandler.post(() -> l.onPacket(pp));
+                    uiHandler.post(() -> l.onPacket(p));
             }
-        } catch (Exception ignored) {} finally {
+        } catch (Exception e) {
+            lastError = String.valueOf(e);
+        } finally {
             try { in.close(); } catch (Exception ignored) {}
             try { if (vpnFd != null) vpnFd.close(); } catch (Exception ignored) {}
             vpnFd = null;
             running = false;
         }
+    }
+
+    private Notification notification() {
+        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (nm != null) {
+            NotificationChannel ch = new NotificationChannel(
+                    CHANNEL_ID, "Packet capture", NotificationManager.IMPORTANCE_LOW);
+            ch.setDescription("VPN-tunnel packet capture");
+            nm.createNotificationChannel(ch);
+        }
+        Intent open = new Intent(this, PacketCaptureActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        int piFlags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE;
+        PendingIntent pi = PendingIntent.getActivity(this, 0, open, piFlags);
+        Notification.Builder nb = new Notification.Builder(this, CHANNEL_ID)
+                .setContentTitle("OpenCode packet capture")
+                .setContentText("Capturing traffic through the local VPN tunnel")
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setOngoing(true)
+                .setContentIntent(pi);
+        return nb.build();
     }
 }
