@@ -770,17 +770,17 @@ public final class Debian {
     // ----------------------------------------------------- launcher script
 
     /** P37 — the guest credential-helper gitconfig (written by
-     *  writeLauncher next to the launcher script). git does NOT read
-     *  GH_TOKEN on its own — the field report: token in the env, push
-     *  still failed. The FILE holds no secret; the helper reads
-     *  $GH_TOKEN at push time. Pure so the suite can pin the exact
-     *  quoting: the printf format must reach the file as the two-char
-     *  backslash-n sequence (the helper prints real newlines when git
-     *  asks for credentials at push time). */
+     *  writeLauncher next to the launcher script). The FILE holds no
+     *  secret; the helper reads $GH_TOKEN at push time. Keep the shell
+     *  function newline-escaped for git-config and avoid semicolons:
+     *  git-config treats an unquoted semicolon as a comment delimiter. */
     static String gitConfigSnippet() {
         return "[credential \"https://github.com\"]\n"
-             + "\thelper = !f() { test \"$1\" = get && "
-             + "printf 'username=x-access-token\\npassword=%s\\n' \"$GH_TOKEN\"; }; f\n";
+             + "\thelper = !f() {\\n"
+             + "[ \"$1\" = get ] || return 0\\n"
+             + "echo username=x-access-token\\n"
+             + "echo \"password=$GH_TOKEN\"\\n"
+             + "}\\nf\n";
     }
 
     /**
