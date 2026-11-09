@@ -208,6 +208,9 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
         sb.addView(divider());
         sb.addView(switchRow("Direct LAN access", "lan_direct",
                 "when DNS bridge is ON, proxy-aware HTTP tools bypass the proxy for private IPv4 LAN ranges; does not grant raw sockets or change TCP/UDP routing"));
+        sb.addView(divider());
+        sb.addView(switchRow("LAN discovery bridge", LanBridge.PREF,
+                "loopback URL the agent can GET for a non-root TCP-connect scan of the local network (hosts + open ports); no ARP/SYN, no packet capture; see ~/.lan-bridge"));
         root.addView(sb);
 
         // ---- environment (P12: Debian 12 + apt via proot)

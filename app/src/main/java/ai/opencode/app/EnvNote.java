@@ -74,20 +74,30 @@ public final class EnvNote {
 
     /** Mode-aware entry point (P42). RunHub calls this. */
     public static String note(Context c) {
-        return note(mode(c), ghConfigured(c), Sandbox.ready(c));
+        boolean lanBridge = false;
+        try {
+            lanBridge = c.getSharedPreferences("oc", Context.MODE_PRIVATE)
+                    .getBoolean(LanBridge.PREF, true);
+        } catch (Exception ignored) {}
+        return note(mode(c), ghConfigured(c), Sandbox.ready(c), lanBridge);
     }
 
     /** The Debian-guest variant — the same text the P37 field run was
      *  shown, corrected by P42 (CA bundle preseeded, honest bootstrap,
      *  no more "fix certs with apt" advice). */
     public static String note(boolean ghSet) {
-        return note(Mode.DEBIAN, ghSet, false);
+        return note(Mode.DEBIAN, ghSet, false, true);
     }
 
     /** The note. The GitHub paragraph is honest in BOTH states: present
      *  (scoped, what it is for, never print it) or absent (pushes will
      *  fail; where the user adds one). */
     public static String note(Mode m, boolean ghSet, boolean alpineReady) {
+        return note(m, ghSet, alpineReady, true);
+    }
+
+    public static String note(Mode m, boolean ghSet, boolean alpineReady,
+                              boolean lanBridge) {
         StringBuilder s = new StringBuilder();
         s.append("<system-reminder>\n");
         if (m == Mode.DEBIAN) {
@@ -143,6 +153,17 @@ public final class EnvNote {
         s.append("tell the user once: Diagnostics → DNS bridge ON → ");
         s.append("restart server. Do not debug DNS; it is intentionally ");
         s.append("not a normal Linux network.\n");
+        if (lanBridge) {
+            s.append("LAN discovery: `cat ~/.lan-bridge` holds a 127.0.0.1 ");
+            s.append("URL (with a per-install token). GET it with curl (or ");
+            s.append("any HTTP client) for JSON: local IPv4 interfaces and ");
+            s.append("subnets plus the live hosts found by a NON-ROOT ");
+            s.append("TCP-connect scan (open ports included). It cannot do ");
+            s.append("ARP/SYN scans, packet capture, or see hosts that drop ");
+            s.append("every probe — those need root/adb; do not install a ");
+            s.append("scanner to retry. The same JSON lands in ~/.lan-last.json ");
+            s.append("after each scan.\n");
+        }
         // P42 anti-loop paragraph — the money saver.
         s.append("If an environment probe fails twice, stop probing: ");
         s.append("report what is missing to the user and continue the ");

@@ -299,6 +299,10 @@ public class ServerService extends Service {
         // already does it). From now on the SSE feed NEVER drops frames:
         // RunHub listens for the whole process lifetime, screen or not.
         RunHub.init(this);
+        // P60: the loopback LAN bridge — the agent's on-demand path to the
+        // Android-side non-root host scan. Loopback + per-install token;
+        // off when the Settings switch is off. Best-effort, never fatal.
+        try { LanBridge.ensureStarted(this); } catch (Exception ignored) {}
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         nm.createNotificationChannel(new NotificationChannel(
                 CH, "OpenCode server", NotificationManager.IMPORTANCE_LOW));

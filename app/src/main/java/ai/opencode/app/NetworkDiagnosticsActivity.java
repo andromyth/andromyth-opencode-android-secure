@@ -68,13 +68,14 @@ public final class NetworkDiagnosticsActivity extends Activity {
         root.addView(title);
 
         TextView note = new TextView(this);
-        note.setText("Android-native checks. No packet capture, host scanning, route changes or privilege escalation.");
+        note.setText("Android-native checks plus a non-root TCP-connect LAN scan. No packet capture, ARP/SYN scanning, route changes or privilege escalation.");
         note.setTextSize(12);
         note.setTextColor(Theme.TXT_DIM);
         root.addView(note);
 
         root.addView(action("Refresh network / DNS", v -> refreshNetwork()));
         root.addView(action("Scan nearby Wi-Fi", v -> startWifiScan()));
+        root.addView(action("Scan LAN hosts (non-root)", v -> scanLanHosts()));
         root.addView(action("Discover LAN services (mDNS)", v -> discoverMdns()));
         root.addView(action("Stop mDNS discovery", v -> stopDiscovery()));
 
@@ -86,6 +87,9 @@ public final class NetworkDiagnosticsActivity extends Activity {
         root.addView(output);
         refreshNetwork();
         registerScanReceiver();
+        // Make the agent's loopback bridge available even if the user
+        // opened diagnostics before the server service started.
+        try { LanBridge.ensureStarted(this); } catch (Exception ignored) {}
     }
 
     private TextView action(String label, View.OnClickListener listener) {
@@ -152,6 +156,31 @@ public final class NetworkDiagnosticsActivity extends Activity {
                 : "location permission required"));
         line("Raw sockets / CAP_NET_RAW: not granted by this Android API bridge");
         line("CAP_NET_ADMIN / monitor mode: privileged-only");
+    }
+
+    private void scanLanHosts() {
+        line("");
+        line("LAN host scan (TCP connect, non-root) — scanning…");
+        final Context app = getApplicationContext();
+        new Thread(() -> {
+            String json;
+            try {
+                json = LanDiscovery.scanJson(app);
+            } catch (Exception e) {
+                final String err = String.valueOf(e);
+                runOnUiThread(() -> line("LAN scan failed: " + err));
+                return;
+            }
+            final String summary = LanDiscovery.summary(json);
+            LanBridge.writeLast(app, json);
+            final String bridge = LanBridge.url(app);
+            runOnUiThread(() -> {
+                line(summary);
+                line("");
+                line("Raw ARP/SYN scans and packet capture need root/adb; not attempted.");
+                if (bridge != null) line("Agent bridge: " + bridge);
+            });
+        }, "oc-lan-ui-scan").start();
     }
 
     private boolean hasLocationPermission() {
