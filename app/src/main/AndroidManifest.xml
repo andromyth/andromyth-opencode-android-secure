@@ -241,5 +241,21 @@
         <receiver
             android:name=".WatchdogReceiver"
             android:exported="false"/>
+        <!-- Sniffnet/Wireshark: VPN-tunnel packet capture + dissection. -->
+        <service
+            android:name=".PacketCaptureService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.net.VpnService"/>
+            </intent-filter>
+        </service>
+
+        <!-- Sniffnet/Wireshark: packet capture UI. -->
+        <activity
+            android:name=".PacketCaptureActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density|uiMode"
+            android:label="Packet capture"/>
     </application>
 </manifest>

@@ -78,6 +78,7 @@ public final class NetworkDiagnosticsActivity extends Activity {
         root.addView(action("Scan LAN devices (TCP + mDNS/SSDP/NBNS)", v -> scanLanHosts()));
         root.addView(action("Discover LAN services (mDNS)", v -> discoverMdns()));
         root.addView(action("Stop mDNS discovery", v -> stopDiscovery()));
+        root.addView(action("Capture packets (VPN tunnel)", v -> startPacketCapture()));
 
         output = new TextView(this);
         output.setTextSize(12);
@@ -295,6 +296,10 @@ public final class NetworkDiagnosticsActivity extends Activity {
             try { nsd.stopServiceDiscovery(listener); } catch (Exception ignored) {}
         }
         discoveries.clear();
+    }
+
+    private void startPacketCapture() {
+        startActivity(new Intent(this, PacketCaptureActivity.class));
     }
 
     @Override public void onRequestPermissionsResult(int requestCode,
