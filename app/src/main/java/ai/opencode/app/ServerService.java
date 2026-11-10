@@ -295,6 +295,14 @@ public class ServerService extends Service {
         super.onCreate();
         appCtx = getApplicationContext();
         procStartTs = System.currentTimeMillis();   // P27 boot-budget t0
+        // P61: satisfy the startForegroundService() contract immediately.
+        // onStartCommand can be delayed while the main thread is busy; the
+        // system kills the app if startForeground() is not called within
+        // ~5 s (ForegroundServiceDidNotStartInTimeException).
+        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        nm.createNotificationChannel(new NotificationChannel(
+                CH, "OpenCode server", NotificationManager.IMPORTANCE_LOW));
+        startForeground(NOTIF_ID, buildNotif("starting…"));
         // P25: the run engine binds here too (defensive — App.onCreate
         // already does it). From now on the SSE feed NEVER drops frames:
         // RunHub listens for the whole process lifetime, screen or not.
@@ -303,9 +311,6 @@ public class ServerService extends Service {
         // Android-side non-root host scan. Loopback + per-install token;
         // off when the Settings switch is off. Best-effort, never fatal.
         try { LanBridge.ensureStarted(this); } catch (Exception ignored) {}
-        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        nm.createNotificationChannel(new NotificationChannel(
-                CH, "OpenCode server", NotificationManager.IMPORTANCE_LOW));
     }
 
     /** P27: process start — the cold-boot budget's other endpoint. */
@@ -318,6 +323,7 @@ public class ServerService extends Service {
             wantSvc(this, false);          // P50: a user stop clears the want
             stopServer();
             setState(ST_STOPPED, "stopped");
+            stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;
         }

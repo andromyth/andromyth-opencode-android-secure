@@ -187,6 +187,16 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density|uiMode"
             android:label="Diagnostics"/>
 
+        <!-- P61: Settings → Network & LAN diagnostics must be declared, or
+             startActivity() throws ActivityNotFoundException and the whole
+             screen (including the VPN packet-capture entry point) is
+             unreachable. -->
+        <activity
+            android:name=".NetworkDiagnosticsActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density|uiMode"
+            android:label="Network &amp; LAN diagnostics"/>
+
         <activity
             android:name=".CaptureActivity"
             android:exported="false"
