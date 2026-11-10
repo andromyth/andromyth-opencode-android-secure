@@ -1,6 +1,9 @@
 package ai.opencode.app;
 
 import android.Manifest;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbInterface;
+import android.hardware.usb.UsbManager;
 import android.app.Activity;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
@@ -68,6 +71,7 @@ public final class WifiSecurityActivity extends Activity {
         status.setTextColor(Theme.TXT);
         root.addView(status);
         root.addView(action("Check Android compatibility", v -> showCompatibility()));
+        root.addView(action("Check USB-OTG adapter", v -> showUsbHostDevices()));
         root.addView(action("Scan nearby Wi-Fi (passive)", v -> requestScan()));
         root.addView(action("Analyze findings with cloud AI", v -> askCloudAi()));
         root.addView(action("Copy assessment report", v -> copyReport()));
@@ -121,6 +125,46 @@ public final class WifiSecurityActivity extends Activity {
         }
         b.append("Monitor mode / raw 802.11 capture: NOT EXPOSED through the public Android Wi-Fi API.\n");
         b.append("Root does not override driver, firmware, SELinux or Android API limitations.\n");
+        status.setText(b.toString());
+    }
+
+    private void showUsbHostDevices() {
+        StringBuilder b = new StringBuilder();
+        if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_USB_HOST)) {
+            b.append("USB host / OTG: NOT REPORTED by Android for this device.\\n");
+            b.append("A USB adapter cannot be assessed through the Android USB host API.\\n");
+            status.setText(b.toString());
+            return;
+        }
+
+        UsbManager manager = (UsbManager) getSystemService(Context.USB_SERVICE);
+        if (manager == null) {
+            status.setText("USB host service: UNAVAILABLE.");
+            return;
+        }
+
+        java.util.HashMap<String, UsbDevice> devices = manager.getDeviceList();
+        b.append("USB host / OTG: AVAILABLE\\n");
+        b.append("Attached USB devices: ").append(devices.size()).append('\\n');
+        if (devices.isEmpty()) {
+            b.append("No USB device is currently enumerated. Check the OTG adapter, cable and power.\\n");
+        }
+        for (UsbDevice device : devices.values()) {
+            b.append("Device VID:PID = 0x")
+                    .append(Integer.toHexString(device.getVendorId()))
+                    .append(":0x").append(Integer.toHexString(device.getProductId()))
+                    .append("; interfaces = ").append(device.getInterfaceCount()).append('\\n');
+            for (int i = 0; i < device.getInterfaceCount(); i++) {
+                UsbInterface usbInterface = device.getInterface(i);
+                b.append("  interface ").append(i)
+                        .append(": class=0x").append(Integer.toHexString(usbInterface.getInterfaceClass()))
+                        .append(", subclass=0x").append(Integer.toHexString(usbInterface.getInterfaceSubclass()))
+                        .append(", protocol=0x").append(Integer.toHexString(usbInterface.getInterfaceProtocol()))
+                        .append('\\n');
+            }
+        }
+        b.append("Important: USB enumeration does not prove this is a Wi-Fi adapter, that a kernel driver is loaded, or that monitor mode/raw 802.11 capture is supported.\\n");
+        b.append("No USB device is opened and no permission, driver, root or security setting is changed.\\n");
         status.setText(b.toString());
     }
 
