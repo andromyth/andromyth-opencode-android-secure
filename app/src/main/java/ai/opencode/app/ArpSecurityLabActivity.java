@@ -53,7 +53,7 @@ public final class ArpSecurityLabActivity extends Activity {
         root.addView(title);
 
         TextView boundary = new TextView(this);
-        boundary.setText("OFFLINE SIMULATION ONLY\nSynthetic IP/MAC observations are generated in memory. Nothing is sent to Wi-Fi or LAN devices. This lab does not inspect the device ARP cache, open packet sockets, alter routes, or enable forwarding. Results below are demonstrations, not findings about your current network.");
+        boundary.setText("LIVE MODE: read-only sampling of Android /proc/net/arp. No packets are sent and no network settings are changed. Android or OEM policy may deny access; if blocked, the app reports live monitoring unavailable. Mapping changes are warnings for investigation, not proof of spoofing. Offline simulations remain available below.");
         boundary.setTextSize(12);
         boundary.setTextColor(Theme.TXT_DIM);
         boundary.setPadding(0, Theme.dp(this, 8), 0, Theme.dp(this, 10));
