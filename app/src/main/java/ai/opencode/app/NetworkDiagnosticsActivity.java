@@ -76,6 +76,8 @@ public final class NetworkDiagnosticsActivity extends Activity {
 
         root.addView(action("Refresh network / DNS", v -> refreshNetwork()));
         root.addView(action("Scan nearby Wi-Fi", v -> startWifiScan()));
+        root.addView(action("Wi-Fi security assessment + cloud AI", v ->
+                startActivity(new Intent(this, WifiSecurityActivity.class))));
         root.addView(action("Scan LAN devices (TCP + mDNS/SSDP/NBNS)", v -> scanLanHosts()));
         root.addView(action("Discover LAN services (mDNS)", v -> discoverMdns()));
         root.addView(action("Export LAN discovery report", v -> exportLanReport()));
