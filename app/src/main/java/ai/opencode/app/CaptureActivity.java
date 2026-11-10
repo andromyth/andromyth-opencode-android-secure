@@ -84,6 +84,13 @@ public class CaptureActivity extends Activity {
         row2.addView(copy);
         root.addView(row2);
 
+        LinearLayout row3 = new LinearLayout(this);
+        row3.setOrientation(LinearLayout.HORIZONTAL);
+        TextView agent = chip("Copy agent prompt");
+        agent.setOnClickListener(v -> copyAgentPrompt());
+        row3.addView(agent);
+        root.addView(row3);
+
         root.addView(section("domains"));
         tvList = monoText();
         root.addView(tvList);
@@ -93,7 +100,9 @@ public class CaptureActivity extends Activity {
                 + "tunnel, so speed and connectivity are unchanged. Encrypted "
                 + "DNS (Private DNS / DoH) and apps that ship their own resolver "
                 + "are invisible here. One VPN at a time: disconnect any other "
-                + "VPN first."));
+                + "VPN first. Export writes capture-domains.tsv; Copy agent "
+                + "prompt copies a ready-to-paste analysis request for the "
+                + "OpenCode agent."));
         paint();
     }
 
@@ -179,6 +188,23 @@ public class CaptureActivity extends Activity {
             ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
             cm.setPrimaryClip(ClipData.newPlainText("opencode capture", body));
             Toast.makeText(this, "domain list copied", Toast.LENGTH_SHORT).show();
+        } catch (Throwable t) {
+            Toast.makeText(this, "copy failed: " + t, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void copyAgentPrompt() {
+        try {
+            File f = new File(Binaries.homeDir(this), "capture-domains.tsv");
+            String prompt = "Analyze the captured DNS domains in "
+                    + f.getAbsolutePath()
+                    + " and list the likely URLs, services, and any suspicious "
+                    + "destinations.";
+            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(ClipData.newPlainText("opencode capture", prompt));
+            Toast.makeText(this,
+                    "Agent prompt copied — export first, then paste into OpenCode",
+                    Toast.LENGTH_LONG).show();
         } catch (Throwable t) {
             Toast.makeText(this, "copy failed: " + t, Toast.LENGTH_SHORT).show();
         }

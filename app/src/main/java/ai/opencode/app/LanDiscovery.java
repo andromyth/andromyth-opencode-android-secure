@@ -226,6 +226,49 @@ public final class LanDiscovery {
         return scanJson(c, ports, timeoutMs, null);
     }
 
+    /** Run only the mDNS/DNS-SD engine and return a human-readable list.
+     *  Uses the app's own multicast scanner instead of the platform
+     *  NsdManager, which has crashed in its callback handler on some
+     *  Android 14 builds. */
+    public static String mdnsSummary(Context c) {
+        WifiManager wm = null;
+        try {
+            wm = (WifiManager) c.getApplicationContext()
+                    .getSystemService(Context.WIFI_SERVICE);
+        } catch (Exception ignored) {
+        }
+        WifiManager.MulticastLock lock = null;
+        if (wm != null) {
+            try {
+                lock = wm.createMulticastLock("oc-mdns-services");
+                lock.setReferenceCounted(false);
+                lock.acquire();
+            } catch (Exception e) {
+                lock = null;
+            }
+        }
+        try {
+            NetInfo net = netInfo(c);
+            List<Found> found = mdnsDiscover(net);
+            if (found.isEmpty())
+                return "mDNS: no services found (no responders, or multicast is filtered by this network).";
+            StringBuilder b = new StringBuilder("mDNS services:\n");
+            for (Found f : found) {
+                b.append("  ").append(f.ip);
+                if (f.name != null && !f.name.isEmpty())
+                    b.append(" · ").append(f.name);
+                if (f.service != null && !f.service.isEmpty())
+                    b.append(" · ").append(f.service);
+                b.append('\n');
+            }
+            return b.toString();
+        } finally {
+            if (lock != null) {
+                try { lock.release(); } catch (Exception ignored) {}
+            }
+        }
+    }
+
     /** Full scan; returns the JSON document described in README/EnvNote. */
     public static String scanJson(Context c, int[] ports, int timeoutMs, Options opt) {
         if (opt == null) opt = new Options();

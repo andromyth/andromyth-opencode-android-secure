@@ -74,16 +74,20 @@ public class CaptureService extends VpnService {
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         nm.createNotificationChannel(new NotificationChannel(
                 CH, "Network capture", NotificationManager.IMPORTANCE_LOW));
+        // Satisfy the foreground-service deadline before onStartCommand can
+        // block on VPN setup; otherwise Android may throw
+        // ForegroundServiceDidNotStartInTimeException.
+        startForeground(NOTIF_ID, notif("capture active"));
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
             stopCapture();
+            stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;
         }
-        startForeground(NOTIF_ID, notif("starting…"));
         if (running) stopCapture();
         if (!startCapture()) {
             stopForeground(true);

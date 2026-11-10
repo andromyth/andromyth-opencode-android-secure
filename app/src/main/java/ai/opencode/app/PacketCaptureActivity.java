@@ -80,6 +80,8 @@ public class PacketCaptureActivity extends Activity implements PacketCaptureServ
 
         toggle = action(root, capturing ? "Stop capture" : "Start capture", v -> startStop());
         action(root, "Export .pcap (open in Wireshark)", v -> exportPcap());
+        action(root, "Capture URLs/domains (all apps, DNS)", v ->
+                startActivity(new Intent(this, CaptureActivity.class)));
         action(root, "Clear", v -> clear());
 
         status = new TextView(this);

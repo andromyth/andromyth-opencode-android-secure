@@ -11,12 +11,11 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
-import android.net.nsd.NsdManager;
-import android.net.nsd.NsdServiceInfo;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Looper;
 import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -31,24 +30,17 @@ import java.util.List;
 /** Android-native Wi-Fi, DNS and mDNS diagnostics; no root or raw sockets required. */
 public final class NetworkDiagnosticsActivity extends Activity {
     private static final int REQ_LOCATION = 7401;
-    private static final String[] MDNS_TYPES = {
-            "_adb-tls-pairing._tcp.", "_adb-tls-connect._tcp.", "_adb._tcp.", "_googlecast._tcp.",
-            "_ipp._tcp.", "_printer._tcp."
-    };
 
     private TextView output;
     private WifiManager wifi;
-    private NsdManager nsd;
     private ConnectivityManager connectivity;
     private BroadcastReceiver scanReceiver;
-    private final java.util.List<NsdManager.DiscoveryListener> discoveries =
-            new java.util.ArrayList<>();
     private final StringBuilder report = new StringBuilder();
+    private boolean destroyed;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         wifi = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
-        nsd = (NsdManager) getSystemService(NSD_SERVICE);
         connectivity = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
 
         ScrollView scroll = new ScrollView(this);
@@ -68,7 +60,7 @@ public final class NetworkDiagnosticsActivity extends Activity {
         root.addView(title);
 
         TextView note = new TextView(this);
-        note.setText("Android-native checks plus a non-root LAN scan: TCP connect with mDNS, SSDP/UPnP, NetBIOS and reverse-DNS discovery. Packet dissection is available through a no-root VPN tunnel; ARP/SYN scanning, route changes and privilege escalation are not.");
+        note.setText("Android-native checks plus a non-root LAN scan: TCP connect with mDNS, SSDP/UPnP, NetBIOS and reverse-DNS discovery. Packet dissection is available through a no-root VPN tunnel; ARP/SYN scanning, route changes and privilege escalation are not. For a connectivity-preserving list of domains/URLs across all apps, use Capture URLs/domains (all apps, DNS).");
         note.setTextSize(12);
         note.setTextColor(Theme.TXT_DIM);
         root.addView(note);
@@ -77,8 +69,9 @@ public final class NetworkDiagnosticsActivity extends Activity {
         root.addView(action("Scan nearby Wi-Fi", v -> startWifiScan()));
         root.addView(action("Scan LAN devices (TCP + mDNS/SSDP/NBNS)", v -> scanLanHosts()));
         root.addView(action("Discover LAN services (mDNS)", v -> discoverMdns()));
-        root.addView(action("Stop mDNS discovery", v -> stopDiscovery()));
-        root.addView(action("Capture packets (VPN tunnel)", v -> startPacketCapture()));
+        root.addView(action("Capture URLs/domains (all apps, DNS)", v ->
+                startActivity(new Intent(this, CaptureActivity.class))));
+        root.addView(action("Capture packets (OpenCode-only PCAP)", v -> startPacketCapture()));
 
         output = new TextView(this);
         output.setTextSize(12);
@@ -113,6 +106,13 @@ public final class NetworkDiagnosticsActivity extends Activity {
     }
 
     private void line(String value) {
+        if (destroyed) return;
+        if (Looper.myLooper() == Looper.getMainLooper()) appendLine(value);
+        else runOnUiThread(() -> appendLine(value));
+    }
+
+    private void appendLine(String value) {
+        if (destroyed) return;
         report.append(value).append('\n');
         if (output != null) output.setText(report.toString());
     }
@@ -244,58 +244,19 @@ public final class NetworkDiagnosticsActivity extends Activity {
     }
 
     private void discoverMdns() {
-        if (nsd == null) {
-            line("NsdManager unavailable");
-            return;
-        }
-        for (String type : MDNS_TYPES) {
-            NsdManager.DiscoveryListener listener = new NsdManager.DiscoveryListener() {
-                @Override public void onDiscoveryStarted(String serviceType) {
-                    line("mDNS discovery started: " + serviceType);
-                }
-                @Override public void onServiceFound(NsdServiceInfo service) {
-                    line("mDNS found: " + service.getServiceName() + " · " + service.getServiceType());
-                    nsd.resolveService(service, new NsdManager.ResolveListener() {
-                        @Override public void onResolveFailed(NsdServiceInfo info, int errorCode) {
-                            line("mDNS resolve failed: " + info.getServiceName() + " · " + errorCode);
-                        }
-                        @Override public void onServiceResolved(NsdServiceInfo info) {
-                            String host = info.getHost() == null ? "?" : info.getHost().getHostAddress();
-                            line("  endpoint: " + host + ":" + info.getPort());
-                        }
-                    });
-                }
-                @Override public void onServiceLost(NsdServiceInfo service) {
-                    line("mDNS lost: " + service.getServiceName());
-                }
-                @Override public void onDiscoveryStopped(String serviceType) {
-                    line("mDNS stopped: " + serviceType);
-                }
-                @Override public void onStartDiscoveryFailed(String serviceType, int errorCode) {
-                    line("mDNS start failed: " + serviceType + " · " + errorCode);
-                    try { nsd.stopServiceDiscovery(this); } catch (Exception ignored) {}
-                }
-                @Override public void onStopDiscoveryFailed(String serviceType, int errorCode) {
-                    line("mDNS stop failed: " + serviceType + " · " + errorCode);
-                    try { nsd.stopServiceDiscovery(this); } catch (Exception ignored) {}
-                }
-            };
+        line("");
+        line("mDNS/DNS-SD service discovery (non-root) — scanning…");
+        final Context app = getApplicationContext();
+        new Thread(() -> {
+            String summary;
             try {
-                nsd.discoverServices(type, NsdManager.PROTOCOL_DNS_SD, listener);
-                discoveries.add(listener);
+                summary = LanDiscovery.mdnsSummary(app);
             } catch (Exception e) {
-                line("mDNS unavailable for " + type + ": " + e.getMessage());
+                summary = "mDNS discovery failed: " + e;
             }
-        }
-    }
-
-    private void stopDiscovery() {
-        if (nsd == null) return;
-        for (NsdManager.DiscoveryListener listener :
-                new java.util.ArrayList<>(discoveries)) {
-            try { nsd.stopServiceDiscovery(listener); } catch (Exception ignored) {}
-        }
-        discoveries.clear();
+            final String text = summary;
+            runOnUiThread(() -> line(text));
+        }, "oc-mdns-ui").start();
     }
 
     private void startPacketCapture() {
@@ -312,7 +273,7 @@ public final class NetworkDiagnosticsActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
-        stopDiscovery();
+        destroyed = true;
         if (scanReceiver != null) {
             try { unregisterReceiver(scanReceiver); } catch (Exception ignored) {}
             scanReceiver = null;
