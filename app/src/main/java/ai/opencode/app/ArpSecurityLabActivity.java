@@ -138,7 +138,7 @@ public final class ArpSecurityLabActivity extends Activity {
                     count++;
                     changes.append(alert.type).append(" · ").append(alert.ip)
                             .append(" · expected ").append(alert.expectedMac)
-                            .append(" · observed ").append(alert.observedMac).append('\\n');
+                            .append(" · observed ").append(alert.observedMac).append('\n');
                 }
             }
             status.setText("LIVE · " + snapshot.size() + " entries · "
