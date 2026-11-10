@@ -131,8 +131,8 @@ public final class WifiSecurityActivity extends Activity {
     private void showUsbHostDevices() {
         StringBuilder b = new StringBuilder();
         if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_USB_HOST)) {
-            b.append("USB host / OTG: NOT REPORTED by Android for this device.\\n");
-            b.append("A USB adapter cannot be assessed through the Android USB host API.\\n");
+            b.append("USB host / OTG: NOT REPORTED by Android for this device.\n");
+            b.append("A USB adapter cannot be assessed through the Android USB host API.\n");
             status.setText(b.toString());
             return;
         }
@@ -144,27 +144,27 @@ public final class WifiSecurityActivity extends Activity {
         }
 
         java.util.HashMap<String, UsbDevice> devices = manager.getDeviceList();
-        b.append("USB host / OTG: AVAILABLE\\n");
-        b.append("Attached USB devices: ").append(devices.size()).append('\\n');
+        b.append("USB host / OTG: AVAILABLE\n");
+        b.append("Attached USB devices: ").append(devices.size()).append('\n');
         if (devices.isEmpty()) {
-            b.append("No USB device is currently enumerated. Check the OTG adapter, cable and power.\\n");
+            b.append("No USB device is currently enumerated. Check the OTG adapter, cable and power.\n");
         }
         for (UsbDevice device : devices.values()) {
             b.append("Device VID:PID = 0x")
                     .append(Integer.toHexString(device.getVendorId()))
                     .append(":0x").append(Integer.toHexString(device.getProductId()))
-                    .append("; interfaces = ").append(device.getInterfaceCount()).append('\\n');
+                    .append("; interfaces = ").append(device.getInterfaceCount()).append('\n');
             for (int i = 0; i < device.getInterfaceCount(); i++) {
                 UsbInterface usbInterface = device.getInterface(i);
                 b.append("  interface ").append(i)
                         .append(": class=0x").append(Integer.toHexString(usbInterface.getInterfaceClass()))
                         .append(", subclass=0x").append(Integer.toHexString(usbInterface.getInterfaceSubclass()))
                         .append(", protocol=0x").append(Integer.toHexString(usbInterface.getInterfaceProtocol()))
-                        .append('\\n');
+                        .append('\n');
             }
         }
-        b.append("Important: USB enumeration does not prove this is a Wi-Fi adapter, that a kernel driver is loaded, or that monitor mode/raw 802.11 capture is supported.\\n");
-        b.append("No USB device is opened and no permission, driver, root or security setting is changed.\\n");
+        b.append("Important: USB enumeration does not prove this is a Wi-Fi adapter, that a kernel driver is loaded, or that monitor mode/raw 802.11 capture is supported.\n");
+        b.append("No USB device is opened and no permission, driver, root or security setting is changed.\n");
         status.setText(b.toString());
     }
 
