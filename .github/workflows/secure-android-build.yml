@@ -2,7 +2,6 @@ name: Secure Android APK build and scan
 
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
     paths:
