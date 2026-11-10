@@ -2,10 +2,7 @@ package ai.opencode.app;
 
 import java.util.*;
 
- /**
-  * Offline-only ARP anomaly simulator. It uses in-memory synthetic values only:
-  * no sockets, packet creation/transmission, device ARP reads, or route changes.
-  */
+ /** ARP binding detector and offline simulator. Live observations are supplied only by the read-only neighbour-cache adapter. */
 public final class ArpSpoofLab {
     private ArpSpoofLab() {}
     public enum AlertType { IP_TO_MAC_CHANGED, IP_CLAIMED_BY_MULTIPLE_MACS }
@@ -28,6 +25,7 @@ public final class ArpSpoofLab {
     public static final class Detector {
         private final Map<String,String> baseline = new LinkedHashMap<>();
         private final Map<String,Set<String>> seen = new LinkedHashMap<>();
+        private final Set<String> reportedChanges = new LinkedHashSet<>();
         public Detector(Map<String,String> expectedBindings) {
             if (expectedBindings == null || expectedBindings.isEmpty())
                 throw new IllegalArgumentException("At least one lab baseline binding is required");
@@ -44,9 +42,12 @@ public final class ArpSpoofLab {
             boolean added = addresses.add(observation.mac);
             List<Alert> alerts = new ArrayList<>();
             String expected = baseline.get(observation.ip);
-            if (expected != null && !expected.equals(observation.mac))
+            String changeKey = observation.ip + "|" + observation.mac;
+            if (expected != null && !expected.equals(observation.mac)
+                    && reportedChanges.add("changed|" + changeKey))
                 alerts.add(new Alert(AlertType.IP_TO_MAC_CHANGED, observation.ip, expected, observation.mac));
-            if (added && addresses.size() > 1)
+            if (added && addresses.size() > 1
+                    && reportedChanges.add("multiple|" + changeKey))
                 alerts.add(new Alert(AlertType.IP_CLAIMED_BY_MULTIPLE_MACS, observation.ip, expected, observation.mac));
             return Collections.unmodifiableList(alerts);
         }
