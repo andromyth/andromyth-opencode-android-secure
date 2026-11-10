@@ -198,6 +198,12 @@
             android:label="Network &amp; LAN diagnostics"/>
 
         <activity
+            android:name=".WifiSecurityActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density|uiMode"
+            android:label="Wi-Fi security assessment"/>
+
+        <activity
             android:name=".CaptureActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize"
