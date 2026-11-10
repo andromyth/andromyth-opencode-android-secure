@@ -19,8 +19,8 @@ import java.util.LinkedHashMap;
 import java.io.IOException;
 
 /**
- * Offline ARP security lab. Every observation is synthetic and handled in memory.
- * This screen never reads or changes the device/network ARP table.
+ * Live passive ARP neighbour-cache monitor with offline detector simulations.
+ * Reads the kernel ARP cache only; never sends packets or changes network state.
  */
 public final class ArpSecurityLabActivity extends Activity {
     private LinearLayout history;
