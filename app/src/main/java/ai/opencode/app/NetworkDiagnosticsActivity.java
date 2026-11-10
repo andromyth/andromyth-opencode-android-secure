@@ -71,7 +71,7 @@ public final class NetworkDiagnosticsActivity extends Activity {
         root.addView(action("Discover LAN services (mDNS)", v -> discoverMdns()));
         root.addView(action("Capture URLs/domains (all apps, DNS)", v ->
                 startActivity(new Intent(this, CaptureActivity.class))));
-        root.addView(action("Capture packets (OpenCode-only PCAP)", v -> startPacketCapture()));
+        root.addView(action("Capture packets (VPN tunnel)", v -> startPacketCapture()));
 
         output = new TextView(this);
         output.setTextSize(12);

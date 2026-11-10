@@ -68,12 +68,12 @@ public class PacketCaptureActivity extends Activity implements PacketCaptureServ
         root.addView(title);
 
         TextView note = new TextView(this);
-        note.setText("OpenCode-only VPN capture with IPv4/IPv6, DNS names, HTTP Host, "
-                + "visible TLS SNI and best-effort Android app attribution. Other apps "
-                + "bypass this VPN and keep normal connectivity; OpenCode external "
-                + "network flows are captured but not forwarded while capture is active. "
-                + "TLS payloads are not decrypted. PCAP files are saved in app storage "
-                + "and can be shared with Wireshark.");
+        note.setText("All-app VPN capture with IPv4/IPv6, DNS names, HTTP Host, "
+                + "visible TLS SNI and best-effort Android app attribution. Grant the "
+                + "VPN permission, then tap Start. Packets are dissected and forwarded "
+                + "back to the tunnel, so normal connectivity is preserved while "
+                + "capturing. TLS payloads are not decrypted. PCAP files are saved in "
+                + "app storage and can be shared with Wireshark.");
         note.setTextSize(12);
         note.setTextColor(Theme.TXT_DIM);
         root.addView(note);

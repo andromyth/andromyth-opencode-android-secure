@@ -17,6 +17,7 @@ import android.os.ParcelFileDescriptor;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -28,10 +29,10 @@ import java.util.List;
  *  the device can be dissected. No root, no raw sockets — the user grants
  *  the VPN permission when the activity starts the tunnel.
  *
- *  <p>Capture is read-only: packets read from the tunnel are dissected and
- *  dropped, not forwarded. While capturing, normal device connectivity is
- *  therefore paused (the tunnel would otherwise tunnel every flow). This is
- *  the deliberate, non-root trade-off for a diagnostics sniffer.
+ *  <p>Packets are dissected, stored, then written back to the tunnel, so
+ *  normal connectivity is preserved while capturing. This is the non-root
+ *  trade-off for a diagnostics sniffer: the tunnel adds a small per-packet
+ *  Java parsing cost, but it does not break flows.
  *
  *  <p>Two things used to stop this from working at all:
  *  <ul>
@@ -61,6 +62,8 @@ public class PacketCaptureService extends VpnService {
 
     private static final List<Packet> packets =
             Collections.synchronizedList(new ArrayList<>());
+    private FileInputStream inStream;
+    private FileOutputStream vpnOut;
 
     public static List<Packet> snapshot() {
         synchronized (packets) { return new ArrayList<>(packets); }
@@ -141,6 +144,14 @@ public class PacketCaptureService extends VpnService {
             stopSelf();
             return;
         }
+        try {
+            inStream = new FileInputStream(vpnFd.getFileDescriptor());
+            vpnOut = new FileOutputStream(vpnFd.getFileDescriptor());
+        } catch (Exception e) {
+            lastError = String.valueOf(e);
+            stopCapture();
+            return;
+        }
         worker = workerThread;
         worker.start();
         new Handler(worker.getLooper()).post(this::runTunnel);
@@ -148,15 +159,19 @@ public class PacketCaptureService extends VpnService {
 
     private void stopCapture() {
         running = false;
+        try { if (vpnOut != null) vpnOut.close(); } catch (Exception ignored) {}
+        try { if (inStream != null) inStream.close(); } catch (Exception ignored) {}
+        vpnOut = null;
+        inStream = null;
         try { if (vpnFd != null) vpnFd.close(); } catch (Exception ignored) {}
         vpnFd = null;
         if (worker != null) { worker.quitSafely(); worker = null; }
     }
 
     private void runTunnel() {
-        ParcelFileDescriptor fd = vpnFd;
-        if (fd == null) { running = false; return; }
-        FileInputStream in = new FileInputStream(fd.getFileDescriptor());
+        FileInputStream in = inStream;
+        FileOutputStream out = vpnOut;
+        if (in == null || out == null) { running = false; return; }
         byte[] buf = new byte[65536];
         try {
             while (running) {
@@ -166,22 +181,30 @@ public class PacketCaptureService extends VpnService {
                 byte[] frame = new byte[n];
                 System.arraycopy(buf, 0, frame, 0, n);
                 Packet p = PacketParser.parse(System.currentTimeMillis(), frame);
-                if (p == null) continue;
-                p = attributeOwner(p);
-                synchronized (packets) {
-                    if (packets.size() >= MAX_PACKETS) packets.remove(0);
-                    packets.add(p);
+                if (p != null) {
+                    p = attributeOwner(p);
+                    synchronized (packets) {
+                        if (packets.size() >= MAX_PACKETS) packets.remove(0);
+                        packets.add(p);
+                    }
+                    final Listener l = listener;
+                    final Packet capturedPacket = p;
+                    if (l != null && uiHandler != null)
+                        uiHandler.post(() -> l.onPacket(capturedPacket));
                 }
-                final Listener l = listener;
-                final Packet capturedPacket = p;
-                if (l != null && uiHandler != null)
-                    uiHandler.post(() -> l.onPacket(capturedPacket));
+                // Forward the packet back into the tunnel so normal connectivity
+                // is preserved while dissecting. Without this, a read-only tunnel
+                // drops every flow it captures.
+                try { out.write(frame); out.flush(); } catch (Exception e) { break; }
             }
         } catch (Exception e) {
             lastError = String.valueOf(e);
         } finally {
             try { in.close(); } catch (Exception ignored) {}
+            try { out.close(); } catch (Exception ignored) {}
             try { if (vpnFd != null) vpnFd.close(); } catch (Exception ignored) {}
+            inStream = null;
+            vpnOut = null;
             vpnFd = null;
             running = false;
             if (!snapshot().isEmpty()) {
