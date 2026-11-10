@@ -17,6 +17,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.LinkedHashMap;
 import java.io.IOException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Live passive ARP neighbour-cache monitor with offline detector simulations.
@@ -27,6 +29,7 @@ public final class ArpSecurityLabActivity extends Activity {
     private TextView status;
     private int runCount;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final ExecutorService io = Executors.newSingleThreadExecutor();
     private boolean monitoring;
     private ArpSpoofLab.Detector liveDetector;
     private final Runnable livePoll = new Runnable() { @Override public void run() { pollLive(); if (monitoring) handler.postDelayed(this, 3000L); } };
@@ -44,7 +47,7 @@ public final class ArpSecurityLabActivity extends Activity {
         Theme.window(this);
 
         TextView title = new TextView(this);
-        title.setText("ARP security lab");
+        title.setText("ARP security monitor");
         title.setTextSize(23);
         title.setTextColor(Theme.TXT);
         root.addView(title);
@@ -92,7 +95,7 @@ public final class ArpSecurityLabActivity extends Activity {
         }));
 
         TextView historyTitle = new TextView(this);
-        historyTitle.setText("Simulation history");
+        historyTitle.setText("Live alerts and simulation history");
         historyTitle.setTextSize(18);
         historyTitle.setTextColor(Theme.TXT);
         historyTitle.setPadding(0, Theme.dp(this, 20), 0, Theme.dp(this, 4));
@@ -105,38 +108,53 @@ public final class ArpSecurityLabActivity extends Activity {
 
 
     private void pollLive() {
-        try {
-            Map<String,String> snapshot = ArpNeighbourMonitor.readSnapshot();
-            if (snapshot.isEmpty()) {
-                status.setText("Live neighbour cache readable; no complete IPv4 ARP entries currently available.");
-                return;
+        status.setText("Checking Android neighbour-table access…");
+        io.execute(() -> {
+            try {
+                Map<String,String> snapshot = ArpNeighbourMonitor.readSnapshot();
+                handler.post(() -> applyLiveSnapshot(snapshot));
+            } catch (IOException | SecurityException e) {
+                handler.post(() -> showLiveUnavailable(e));
+            } catch (RuntimeException e) {
+                handler.post(() -> showLiveUnavailable(e));
             }
-            if (liveDetector == null) {
-                liveDetector = new ArpSpoofLab.Detector(new LinkedHashMap<>(snapshot));
-                addLiveCard("LIVE BASELINE", "Captured " + snapshot.size() + " IP-to-MAC bindings.");
-                status.setText("LIVE · Baseline captured: " + snapshot.size() + " entries. Sampling every 3 seconds.");
-                return;
-            }
+        });
+    }
+
+    private void applyLiveSnapshot(Map<String,String> snapshot) {
+        if (isFinishing() || isDestroyed()) return;
+        if (snapshot.isEmpty()) {
+            status.setText("ACCESSIBLE · No complete IPv4 ARP entries are currently exposed. This is not proof that the LAN is clean.");
+        } else if (liveDetector == null) {
+            liveDetector = new ArpSpoofLab.Detector(new LinkedHashMap<>(snapshot));
+            addLiveCard("LIVE BASELINE", "Captured " + snapshot.size() + " complete IP-to-MAC bindings.");
+            status.setText("LIVE · Baseline captured: " + snapshot.size() + " entries.");
+        } else {
             StringBuilder changes = new StringBuilder();
             int count = 0;
-            for (Map.Entry<String,String> e : snapshot.entrySet()) {
+            for (Map.Entry<String,String> entry : snapshot.entrySet()) {
                 for (ArpSpoofLab.Alert alert : liveDetector.observe(
-                        new ArpSpoofLab.Observation(e.getKey(), e.getValue()))) {
+                        new ArpSpoofLab.Observation(entry.getKey(), entry.getValue()))) {
                     count++;
                     changes.append(alert.type).append(" · ").append(alert.ip)
                             .append(" · expected ").append(alert.expectedMac)
-                            .append(" · observed ").append(alert.observedMac).append('\n');
+                            .append(" · observed ").append(alert.observedMac).append('\\n');
                 }
             }
             status.setText("LIVE · " + snapshot.size() + " entries · "
-                    + (count == 0 ? "no new mapping changes" : count + " possible mapping-change warnings"));
+                    + (count == 0 ? "no new mapping-change warnings" : count + " new warnings"));
             if (count > 0) addLiveCard("POSSIBLE ARP ANOMALY — VERIFY", changes.toString().trim());
-        } catch (IOException | SecurityException e) {
-            monitoring = false;
-            handler.removeCallbacks(livePoll);
-            status.setText("LIVE MONITOR UNAVAILABLE: Android denied /proc/net/arp access: " + e);
-            addLiveCard("LIVE ACCESS UNAVAILABLE", String.valueOf(e));
         }
+        if (monitoring) handler.postDelayed(livePoll, 3000L);
+    }
+
+    private void showLiveUnavailable(Exception error) {
+        if (isFinishing() || isDestroyed()) return;
+        monitoring = false;
+        handler.removeCallbacks(livePoll);
+        status.setText("LIVE MONITOR UNAVAILABLE · Android blocked or failed neighbour-table access: "
+                + error.getClass().getSimpleName() + ". No live ARP visibility is available through this method.");
+        addLiveCard("LIVE ACCESS UNAVAILABLE", error.toString());
     }
 
     private void addLiveCard(String label, String detail) {
@@ -158,6 +176,7 @@ public final class ArpSecurityLabActivity extends Activity {
 
     @Override protected void onDestroy() {
         handler.removeCallbacks(livePoll);
+        io.shutdownNow();
         super.onDestroy();
     }
 
