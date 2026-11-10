@@ -3,6 +3,8 @@ package ai.opencode.app;
 import android.Manifest;
 import android.app.Activity;
 import android.content.BroadcastReceiver;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -22,10 +24,16 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
+import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
 import java.util.Collections;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
 /** Android-native Wi-Fi, DNS and mDNS diagnostics; no root or raw sockets required. */
 public final class NetworkDiagnosticsActivity extends Activity {
@@ -36,6 +44,7 @@ public final class NetworkDiagnosticsActivity extends Activity {
     private ConnectivityManager connectivity;
     private BroadcastReceiver scanReceiver;
     private final StringBuilder report = new StringBuilder();
+    private String lastLanJson = "";
     private boolean destroyed;
 
     @Override public void onCreate(Bundle state) {
@@ -69,6 +78,8 @@ public final class NetworkDiagnosticsActivity extends Activity {
         root.addView(action("Scan nearby Wi-Fi", v -> startWifiScan()));
         root.addView(action("Scan LAN devices (TCP + mDNS/SSDP/NBNS)", v -> scanLanHosts()));
         root.addView(action("Discover LAN services (mDNS)", v -> discoverMdns()));
+        root.addView(action("Export LAN discovery report", v -> exportLanReport()));
+        root.addView(action("Copy LAN agent prompt", v -> copyLanAgentPrompt()));
         root.addView(action("Capture URLs/domains (all apps, DNS)", v ->
                 startActivity(new Intent(this, CaptureActivity.class))));
         root.addView(action("Capture packets (VPN tunnel)", v -> startPacketCapture()));
@@ -173,9 +184,11 @@ public final class NetworkDiagnosticsActivity extends Activity {
                 return;
             }
             final String summary = LanDiscovery.summary(json);
+            final String jsonText = json;
             LanBridge.writeLast(app, json);
             final String bridge = LanBridge.url(app);
             runOnUiThread(() -> {
+                lastLanJson = jsonText;
                 line(summary);
                 line("");
                 line("Discovery used mDNS/SSDP/NetBIOS/reverse-DNS. Raw ARP/SYN scans still need root/adb; packet capture uses the no-root VPN tunnel.");
@@ -257,6 +270,59 @@ public final class NetworkDiagnosticsActivity extends Activity {
             final String text = summary;
             runOnUiThread(() -> line(text));
         }, "oc-mdns-ui").start();
+    }
+
+    private String lanReport() {
+        StringBuilder b = new StringBuilder();
+        b.append("OpenCode LAN discovery report\n");
+        b.append("Generated: ").append(new SimpleDateFormat(
+                "yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date())).append("\n\n");
+        b.append("== Diagnostics ==\n").append(report).append('\n');
+        if (lastLanJson != null && !lastLanJson.isEmpty())
+            b.append("== Raw LAN JSON ==\n").append(lastLanJson).append('\n');
+        return b.toString();
+    }
+
+    private File writeLanReport() throws Exception {
+        File f = new File(Binaries.homeDir(this), "lan-report-"
+                + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date())
+                + ".txt");
+        File dir = f.getParentFile();
+        if (dir != null && !dir.isDirectory()) dir.mkdirs();
+        try (FileOutputStream out = new FileOutputStream(f)) {
+            out.write(lanReport().getBytes(StandardCharsets.UTF_8));
+        }
+        return f;
+    }
+
+    private void exportLanReport() {
+        try {
+            File f = writeLanReport();
+            line("");
+            line("LAN report exported: " + f.getAbsolutePath());
+            Toast.makeText(this, f.getAbsolutePath(), Toast.LENGTH_LONG).show();
+        } catch (Throwable t) {
+            line("LAN report export failed: " + t);
+            Toast.makeText(this, "export failed: " + t, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void copyLanAgentPrompt() {
+        try {
+            File f = writeLanReport();
+            String prompt = "Analyze the passive LAN discovery report at "
+                    + f.getAbsolutePath()
+                    + ". Summarize devices, likely device types, exposed services/ports, "
+                    + "and anything unusual. Do not attempt ARP spoofing, raw packet "
+                    + "capture, or intrusive scanning.";
+            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(ClipData.newPlainText("opencode lan report", prompt));
+            Toast.makeText(this,
+                    "Agent prompt copied — report: " + f.getAbsolutePath(),
+                    Toast.LENGTH_LONG).show();
+        } catch (Throwable t) {
+            Toast.makeText(this, "copy failed: " + t, Toast.LENGTH_LONG).show();
+        }
     }
 
     private void startPacketCapture() {

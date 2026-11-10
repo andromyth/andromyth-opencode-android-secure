@@ -900,6 +900,14 @@ public final class LanDiscovery {
                 } else {
                     b.append("  up (no probed port open)");
                 }
+                List<Object> services = Json.list(h, "services");
+                if (services != null && !services.isEmpty()) {
+                    b.append("  services: ");
+                    for (int i = 0; i < services.size(); i++) {
+                        if (i > 0) b.append(", ");
+                        b.append(String.valueOf(services.get(i)));
+                    }
+                }
             }
         }
         return b.toString();
