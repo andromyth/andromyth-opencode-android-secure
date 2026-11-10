@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -12,6 +14,9 @@ import android.widget.TextView;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.Map;
+import java.util.LinkedHashMap;
+import java.io.IOException;
 
 /**
  * Offline ARP security lab. Every observation is synthetic and handled in memory.
@@ -21,6 +26,10 @@ public final class ArpSecurityLabActivity extends Activity {
     private LinearLayout history;
     private TextView status;
     private int runCount;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private boolean monitoring;
+    private ArpSpoofLab.Detector liveDetector;
+    private final Runnable livePoll = new Runnable() { @Override public void run() { pollLive(); if (monitoring) handler.postDelayed(this, 3000L); } };
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -53,6 +62,18 @@ public final class ArpSecurityLabActivity extends Activity {
         status.setTextColor(Theme.TXT);
         root.addView(status);
 
+        root.addView(action("Start live passive monitoring", v -> {
+            monitoring = true;
+            liveDetector = null;
+            handler.removeCallbacks(livePoll);
+            livePoll.run();
+        }));
+        root.addView(action("Stop live monitoring", v -> {
+            monitoring = false;
+            handler.removeCallbacks(livePoll);
+            status.setText("Live monitoring stopped.");
+        }));
+        root.addView(action("Take one live snapshot", v -> pollLive()));
         root.addView(action("Run normal network scenario", v ->
                 run(ArpSpoofLab.Scenario.NORMAL)));
         root.addView(action("Simulate gateway MAC change", v ->
@@ -80,6 +101,64 @@ public final class ArpSecurityLabActivity extends Activity {
         history = new LinearLayout(this);
         history.setOrientation(LinearLayout.VERTICAL);
         root.addView(history);
+    }
+
+
+    private void pollLive() {
+        try {
+            Map<String,String> snapshot = ArpNeighbourMonitor.readSnapshot();
+            if (snapshot.isEmpty()) {
+                status.setText("Live neighbour cache readable; no complete IPv4 ARP entries currently available.");
+                return;
+            }
+            if (liveDetector == null) {
+                liveDetector = new ArpSpoofLab.Detector(new LinkedHashMap<>(snapshot));
+                addLiveCard("LIVE BASELINE", "Captured " + snapshot.size() + " IP-to-MAC bindings.");
+                status.setText("LIVE · Baseline captured: " + snapshot.size() + " entries. Sampling every 3 seconds.");
+                return;
+            }
+            StringBuilder changes = new StringBuilder();
+            int count = 0;
+            for (Map.Entry<String,String> e : snapshot.entrySet()) {
+                for (ArpSpoofLab.Alert alert : liveDetector.observe(
+                        new ArpSpoofLab.Observation(e.getKey(), e.getValue()))) {
+                    count++;
+                    changes.append(alert.type).append(" · ").append(alert.ip)
+                            .append(" · expected ").append(alert.expectedMac)
+                            .append(" · observed ").append(alert.observedMac).append('\n');
+                }
+            }
+            status.setText("LIVE · " + snapshot.size() + " entries · "
+                    + (count == 0 ? "no new mapping changes" : count + " possible mapping-change warnings"));
+            if (count > 0) addLiveCard("POSSIBLE ARP ANOMALY — VERIFY", changes.toString().trim());
+        } catch (IOException | SecurityException e) {
+            monitoring = false;
+            handler.removeCallbacks(livePoll);
+            status.setText("LIVE MONITOR UNAVAILABLE: Android denied /proc/net/arp access: " + e);
+            addLiveCard("LIVE ACCESS UNAVAILABLE", String.valueOf(e));
+        }
+    }
+
+    private void addLiveCard(String label, String detail) {
+        TextView card = new TextView(this);
+        card.setText(new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date())
+                + " · " + label + "\n" + detail
+                + "\nRead-only cache observation; mapping changes are not proof of spoofing.");
+        card.setTextSize(12);
+        card.setTextColor(Theme.TXT);
+        card.setPadding(Theme.dp(this, 12), Theme.dp(this, 12), Theme.dp(this, 12), Theme.dp(this, 12));
+        history.addView(card, 0);
+    }
+
+    @Override protected void onPause() {
+        monitoring = false;
+        handler.removeCallbacks(livePoll);
+        super.onPause();
+    }
+
+    @Override protected void onDestroy() {
+        handler.removeCallbacks(livePoll);
+        super.onDestroy();
     }
 
     private TextView action(String label, View.OnClickListener listener) {
