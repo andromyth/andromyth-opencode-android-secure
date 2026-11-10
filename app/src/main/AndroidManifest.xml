@@ -277,7 +277,7 @@
             </intent-filter>
         </service>
 
-        <!-- Sniffnet/Wireshark: packet capture UI. -->
+        <activity\n            android:name=".ArpSecurityLabActivity"\n            android:exported="false"\n            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density|uiMode"\n            android:label="ARP security lab (offline)"/>\n\n        <!-- Sniffnet/Wireshark: packet capture UI. -->
         <activity
             android:name=".PacketCaptureActivity"
             android:exported="false"
