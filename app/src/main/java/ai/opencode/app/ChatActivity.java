@@ -313,6 +313,11 @@ public class ChatActivity extends Activity
             if (ask != null) ui.postDelayed(() -> {
                 if (!isFinishing() && !isDestroyed()) canvasDialog(ask);
             }, 350);
+            final String prefill = in.getStringExtra("prefillMessage");
+            if (prefill != null && !prefill.trim().isEmpty()) {
+                input.setText(prefill);
+                input.setSelection(input.getText().length());
+            }
         }
 
         View btnPaletteV = findViewById(R.id.btnPalette);
