@@ -29,8 +29,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Live passive ARP neighbour-cache monitor with offline detector simulations.
- * Reads the kernel ARP cache only; never sends packets or changes network state.
+ * Passive ARP-cache monitor with an Android connection-metadata fallback and offline simulations.
+ * The fallback observes gateway/AP identity only; it is not ARP inspection or packet capture.
  */
 public final class ArpSecurityLabActivity extends Activity {
     private LinearLayout history;
@@ -187,12 +187,12 @@ public final class ArpSecurityLabActivity extends Activity {
     private void applyNetworkContext(NetworkContextMonitor.Snapshot snapshot) {
         if (isFinishing() || isDestroyed()) return;
         String observation = contextMonitor.observe(snapshot);
-        status.setText("LIVE NETWORK CONTEXT · ARP TABLE RESTRICTED\\n"
-                + "Wi-Fi transport: " + (snapshot.wifiTransport ? "yes" : "no/unknown") + "\\n"
-                + "Default gateway: " + (snapshot.gateway == null ? "not exposed" : snapshot.gateway) + "\\n"
+        status.setText("LIVE NETWORK CONTEXT · ARP TABLE RESTRICTED\n"
+                + "Wi-Fi transport: " + (snapshot.wifiTransport ? "yes" : "no/unknown") + "\n"
+                + "Default gateway: " + (snapshot.gateway == null ? "not exposed" : snapshot.gateway) + "\n"
                 + "Access point BSSID: " + (snapshot.bssid == null ? "not exposed by Android" : snapshot.bssid)
-                + "\\n" + observation
-                + "\\nThis is connection metadata, not ARP/MAC binding inspection or proof of spoofing.");
+                + "\n" + observation
+                + "\nThis is connection metadata, not ARP/MAC binding inspection or proof of spoofing.");
         if (observation.startsWith("CHANGE")) {
             addLiveCard("NETWORK CONTEXT CHANGED — VERIFY", observation);
         } else if (contextMonitor.isFirstObservation()) {
