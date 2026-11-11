@@ -6,6 +6,14 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.RouteInfo;
+import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiManager;
 import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -21,8 +29,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Live passive ARP neighbour-cache monitor with offline detector simulations.
- * Reads the kernel ARP cache only; never sends packets or changes network state.
+ * Passive ARP-cache monitor with an Android connection-metadata fallback and offline simulations.
+ * The fallback observes gateway/AP identity only; it is not ARP inspection or packet capture.
  */
 public final class ArpSecurityLabActivity extends Activity {
     private LinearLayout history;
@@ -32,7 +40,9 @@ public final class ArpSecurityLabActivity extends Activity {
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private boolean monitoring;
     private ArpSpoofLab.Detector liveDetector;
-    private final Runnable livePoll = new Runnable() { @Override public void run() { pollLive(); if (monitoring) handler.postDelayed(this, 3000L); } };
+    private final NetworkContextMonitor contextMonitor = new NetworkContextMonitor();
+    private boolean arpAccessUnavailable;
+    private final Runnable livePoll = new Runnable() { @Override public void run() { pollLive(); } };
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -53,7 +63,7 @@ public final class ArpSecurityLabActivity extends Activity {
         root.addView(title);
 
         TextView boundary = new TextView(this);
-        boundary.setText("LIVE MODE: read-only sampling of Android /proc/net/arp. No packets are sent and no network settings are changed. Android or OEM policy may deny access; if blocked, the app reports live monitoring unavailable. Mapping changes are warnings for investigation, not proof of spoofing. Offline simulations remain available below.");
+        boundary.setText("LIVE MODE: first attempts read-only /proc/net/arp sampling. If Android denies access, falls back to supported Android connection metadata (default gateway and Wi-Fi access-point BSSID when exposed). The fallback does NOT inspect ARP bindings or capture packets. Changes are investigation warnings, not proof of spoofing. No packets are sent and no network settings are changed.");
         boundary.setTextSize(12);
         boundary.setTextColor(Theme.TXT_DIM);
         boundary.setPadding(0, Theme.dp(this, 8), 0, Theme.dp(this, 10));
@@ -68,6 +78,8 @@ public final class ArpSecurityLabActivity extends Activity {
         root.addView(action("Start live passive monitoring", v -> {
             monitoring = true;
             liveDetector = null;
+            arpAccessUnavailable = false;
+            contextMonitor.reset();
             handler.removeCallbacks(livePoll);
             livePoll.run();
         }));
@@ -108,17 +120,85 @@ public final class ArpSecurityLabActivity extends Activity {
 
 
     private void pollLive() {
-        status.setText("Checking Android neighbour-table access…");
+        status.setText(arpAccessUnavailable
+                ? "Reading Android network context (ARP table is restricted)…"
+                : "Checking Android neighbour-table access…");
         io.execute(() -> {
+            if (!arpAccessUnavailable) {
+                try {
+                    Map<String,String> snapshot = ArpNeighbourMonitor.readSnapshot();
+                    handler.post(() -> applyLiveSnapshot(snapshot));
+                    return;
+                } catch (IOException | SecurityException e) {
+                    handler.post(() -> arpAccessUnavailable = true);
+                } catch (RuntimeException e) {
+                    handler.post(() -> arpAccessUnavailable = true);
+                }
+            }
             try {
-                Map<String,String> snapshot = ArpNeighbourMonitor.readSnapshot();
-                handler.post(() -> applyLiveSnapshot(snapshot));
-            } catch (IOException | SecurityException e) {
-                handler.post(() -> showLiveUnavailable(e));
+                NetworkContextMonitor.Snapshot snapshot = readNetworkContext();
+                handler.post(() -> applyNetworkContext(snapshot));
             } catch (RuntimeException e) {
                 handler.post(() -> showLiveUnavailable(e));
             }
         });
+    }
+
+    /** Uses supported Android connectivity APIs; this is not ARP or packet capture. */
+    private NetworkContextMonitor.Snapshot readNetworkContext() {
+        String gateway = null;
+        boolean wifiTransport = false;
+        ConnectivityManager connectivity =
+                (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (connectivity != null) {
+            Network network = connectivity.getActiveNetwork();
+            if (network != null) {
+                NetworkCapabilities capabilities = connectivity.getNetworkCapabilities(network);
+                wifiTransport = capabilities != null
+                        && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI);
+                LinkProperties properties = connectivity.getLinkProperties(network);
+                if (properties != null) {
+                    for (RouteInfo route : properties.getRoutes()) {
+                        if (route.isDefaultRoute() && route.getGateway() != null) {
+                            gateway = route.getGateway().getHostAddress();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        String bssid = null;
+        WifiManager wifi = (WifiManager) getApplicationContext()
+                .getSystemService(Context.WIFI_SERVICE);
+        if (wifi != null) {
+            WifiInfo info = wifi.getConnectionInfo();
+            if (info != null) {
+                String candidate = info.getBSSID();
+                if (candidate != null && !candidate.isEmpty()
+                        && !candidate.equalsIgnoreCase("02:00:00:00:00:00")) {
+                    bssid = candidate.toLowerCase(Locale.US);
+                }
+            }
+        }
+        return new NetworkContextMonitor.Snapshot(gateway, bssid, wifiTransport);
+    }
+
+    private void applyNetworkContext(NetworkContextMonitor.Snapshot snapshot) {
+        if (isFinishing() || isDestroyed()) return;
+        String observation = contextMonitor.observe(snapshot);
+        status.setText("LIVE NETWORK CONTEXT · ARP TABLE RESTRICTED\n"
+                + "Wi-Fi transport: " + (snapshot.wifiTransport ? "yes" : "no/unknown") + "\n"
+                + "Default gateway: " + (snapshot.gateway == null ? "not exposed" : snapshot.gateway) + "\n"
+                + "Access point BSSID: " + (snapshot.bssid == null ? "not exposed by Android" : snapshot.bssid)
+                + "\n" + observation
+                + "\nThis is connection metadata, not ARP/MAC binding inspection or proof of spoofing.");
+        if (observation.startsWith("CHANGE")) {
+            addLiveCard("NETWORK CONTEXT CHANGED — VERIFY", observation);
+        } else if (contextMonitor.isFirstObservation()) {
+            addLiveCard("NETWORK CONTEXT BASELINE", observation);
+        }
+        if (monitoring) handler.postDelayed(livePoll, 3000L);
     }
 
     private void applyLiveSnapshot(Map<String,String> snapshot) {
@@ -152,9 +232,9 @@ public final class ArpSecurityLabActivity extends Activity {
         if (isFinishing() || isDestroyed()) return;
         monitoring = false;
         handler.removeCallbacks(livePoll);
-        status.setText("LIVE MONITOR UNAVAILABLE · Android blocked or failed neighbour-table access: "
-                + error.getClass().getSimpleName() + ". No live ARP visibility is available through this method.");
-        addLiveCard("LIVE ACCESS UNAVAILABLE", error.toString());
+        status.setText("LIVE NETWORK CONTEXT UNAVAILABLE · Android did not expose active connection metadata: "
+                + error.getClass().getSimpleName() + ".");
+        addLiveCard("LIVE NETWORK CONTEXT UNAVAILABLE", error.toString());
     }
 
     private void addLiveCard(String label, String detail) {
