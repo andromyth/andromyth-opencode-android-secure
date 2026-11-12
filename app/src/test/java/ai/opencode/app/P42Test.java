@@ -95,6 +95,9 @@ public class P42Test {
         Map<String, Object> models = new LinkedHashMap<>();
         Map<String, Object> mdef = new LinkedHashMap<>();
         mdef.put("name", "test-model");
+        Map<String, Object> limit = new LinkedHashMap<>();
+        limit.put("output", 8_192L);
+        mdef.put("limit", limit);
         models.put("test-model", mdef);
         pdef.put("models", models);
         provs.put("prov", pdef);
@@ -132,12 +135,14 @@ public class P42Test {
         assertTrue(ContextPolicy.mergeContextLimit(root, "prov", "test-model", 128_000));
         assertTrue(ContextPolicy.mergeContextLimit(root, "prov", "test-model", 0));
         assertEquals(0, ContextPolicy.readContextLimit(root, "prov", "test-model"));
-        // the model's own "name" survives; the limit shell is gone
+        // The user context override is gone; the required output limit survives.
         Map<String, Object> provs = (Map<String, Object>) root.get("provider");
         Map<String, Object> pdef = (Map<String, Object>) provs.get("prov");
         Map<String, Object> models = (Map<String, Object>) pdef.get("models");
         Map<String, Object> mdef = (Map<String, Object>) models.get("test-model");
-        assertFalse(mdef.containsKey("limit"));
+        Map<String, Object> limit = (Map<String, Object>) mdef.get("limit");
+        assertEquals(8_192L, limit.get("output"));
+        assertFalse(limit.containsKey("context"));
         // clearing when nothing is set changes nothing
         assertFalse(ContextPolicy.mergeContextLimit(root, "prov", "test-model", 0));
     }
