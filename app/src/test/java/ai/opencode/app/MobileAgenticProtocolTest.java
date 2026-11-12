@@ -12,6 +12,9 @@ public class MobileAgenticProtocolTest {
         assertTrue(wrapped.contains("3 BLUEPRINT"));
         assertTrue(wrapped.contains("4 EXECUTE"));
         assertTrue(wrapped.contains("5 HANDOFF"));
+        assertTrue(wrapped.contains("native question tool"));
+        assertTrue(wrapped.contains("question.asked"));
+        assertTrue(wrapped.contains("Approve and Revise"));
         assertTrue(wrapped.endsWith("Inspect this project"));
     }
 
