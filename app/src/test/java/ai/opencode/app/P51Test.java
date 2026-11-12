@@ -1,6 +1,10 @@
 package ai.opencode.app;
 
-import org.junit.Test;
+import o
+  
+ 
+        limit4.put("output", 8_192L);       limit3.put("output", 8_192L);      li
+        limit2.put("output", 8_192L);mit1.put("output", 8_192L);rg.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
@@ -396,19 +400,19 @@ public class P51Test {
 
     @Test public void sanitizeConfig_clampsJunk_andLeavesSaneValues() {
         Map<String, Object> limit1 = new LinkedHashMap<>();
-        limit1.put("context", 10L);                        // below MIN
+limit1.put("context", 10L);                        // below MIN
         Map<String, Object> m1 = new LinkedHashMap<>();
         m1.put("limit", limit1);
         Map<String, Object> limit2 = new LinkedHashMap<>();
-        limit2.put("context", 9_000_000_000L);             // above MAX
+limit2.put("context", 9_000_000_000L);             // above MAX
         Map<String, Object> m2 = new LinkedHashMap<>();
         m2.put("limit", limit2);
         Map<String, Object> limit3 = new LinkedHashMap<>();
-        limit3.put("context", "huge");                     // junk type
+limit3.put("context", "huge");                     // junk type
         Map<String, Object> m3 = new LinkedHashMap<>();
         m3.put("limit", limit3);
         Map<String, Object> limit4 = new LinkedHashMap<>();
-        limit4.put("context", 200_000L);                   // sane
+limit4.put("context", 200_000L);                   // sane
         Map<String, Object> m4 = new LinkedHashMap<>();
         m4.put("limit", limit4);
 
