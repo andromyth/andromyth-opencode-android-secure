@@ -2940,7 +2940,7 @@ public final class RunHub implements ServerService.EventListener {
                 final boolean tp = tersePref();
                 final Boolean told;
                 synchronized (styleTold) { told = styleTold.get(sid); }
-                String wire = TerseMode.wrap(q, tp, told);
+                String wire = TerseMode.wrap(MobileAgenticProtocol.wrap(q), tp, told);
                 final String recap = contextRepair(sid);   // P39: ride here too
                 if (recap != null) wire = recap + "\n\n" + wire;
                 final boolean anchorArmed = anchorPending(sid);   // P44
