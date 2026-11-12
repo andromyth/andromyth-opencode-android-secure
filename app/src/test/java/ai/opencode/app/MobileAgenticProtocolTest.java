@@ -1,8 +1,20 @@
 package ai.opencode.app;
 
-import org.junit.Test;
-import static org.junit.Assert.*;
+import android.content.Context;
 
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.robolectric.RobolectricTestRunner;
+import org.robolectric.RuntimeEnvironment;
+import org.robolectric.annotation.Config;
+
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+
+import static org.junit.Assert.*;
+@RunWith(RobolectricTestRunner.class)
+@Config(sdk = 34)
 public class MobileAgenticProtocolTest {
     @Test public void wrapsNonEmptyMessageWithFivePhaseProtocol() {
         String wrapped = MobileAgenticProtocol.wrap("Inspect this project");
@@ -21,6 +33,23 @@ public class MobileAgenticProtocolTest {
     @Test public void emptyAndNullMessagesRemainUnchanged() {
         assertNull(MobileAgenticProtocol.wrap(null));
         assertEquals("  ", MobileAgenticProtocol.wrap("  "));
+    }
+
+
+    @Test public void installsGlobalSkillOnceAndPreservesUserEdits() throws Exception {
+        Context context = RuntimeEnvironment.getApplication();
+        File target = Binaries.mobileAgenticSkillFile(context);
+        if (target.exists()) target.delete();
+        Binaries.installMobileAgenticSkill(context);
+        assertTrue(target.isFile());
+        String bundled = new String(Files.readAllBytes(target.toPath()),
+                StandardCharsets.UTF_8);
+        assertTrue(bundled.contains("# Mobile Agentic Master v2.0"));
+
+        Files.write(target.toPath(), "user-customized".getBytes(StandardCharsets.UTF_8));
+        Binaries.installMobileAgenticSkill(context);
+        assertEquals("user-customized", new String(Files.readAllBytes(target.toPath()),
+                StandardCharsets.UTF_8));
     }
 
     @Test public void doesNotDoubleWrapAnAlreadyWrappedMessage() {
