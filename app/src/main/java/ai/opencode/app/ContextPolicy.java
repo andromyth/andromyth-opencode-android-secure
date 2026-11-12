@@ -107,6 +107,14 @@ public final class ContextPolicy {
             models.put(mid, mdef);
         }
         Map<String, Object> limit = Json.obj(mdef.get("limit"));
+        // OpenCode's model schema requires limit.output whenever a limit
+        // object is present. Do not create a context-only object: that
+        // makes the entire opencode.json invalid and prevents server boot.
+        if (n > 0 && (limit == null
+                || !(limit.get("output") instanceof Number)
+                || ((Number) limit.get("output")).longValue() <= 0)) {
+            return false;
+        }
         if (n <= 0) {
             // clear: remove the override, then tidy the shells it left
             boolean changed = false;
@@ -155,6 +163,17 @@ public final class ContextPolicy {
                 if (mdef == null) continue;
                 Map<String, Object> limit = Json.obj(mdef.get("limit"));
                 if (limit == null) continue;
+                // A limit object without a positive numeric output is
+                // invalid for the bundled OpenCode config schema. Drop the
+                // whole override and let the model catalog supply defaults;
+                // never invent an output limit for an unknown model.
+                Object output = limit.get("output");
+                if (!(output instanceof Number)
+                        || ((Number) output).longValue() <= 0) {
+                    mdef.remove("limit");
+                    changed = true;
+                    continue;
+                }
                 Object v = limit.get("context");
                 if (v == null) continue;
                 if (!(v instanceof Number)) {
