@@ -472,6 +472,14 @@ public class ServerService extends Service {
             Trail.record(this, "sandbox env", t);
             appendDiag("env", "applyEnv failed: " + t);
         }
+        // Install the globally discoverable skill into the same HOME passed to
+        // OpenCode via Binaries.applyEnv. Preserve any user-edited copy.
+        try {
+            Binaries.installMobileAgenticSkill(this);
+        } catch (Throwable t) {
+            Trail.record(this, "mobile agentic skill install", t);
+            appendDiag("agentic-skill", "install failed: " + t);
+        }
         // Protect the app-private HTTP API with a per-process random password.
         ServerAuth.configureServer(pb);
 

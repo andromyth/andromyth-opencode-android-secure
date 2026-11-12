@@ -2616,7 +2616,7 @@ public final class RunHub implements ServerService.EventListener {
                 // mode the shell actually lands in today.
                 final String eNote = EnvNote.needsNote(eTold)
                         ? EnvNote.note(appCtx) : null;
-                String wire = TerseMode.wrap(text, tp, told);
+                String wire = TerseMode.wrap(MobileAgenticProtocol.wrap(text), tp, told);
                 if (eNote != null) wire = eNote + "\n\n" + wire;
                 if (rNote != null) wire = rNote + "\n\n" + wire;
                 // P39: context repair rides FIRST (outermost block) when the
@@ -2940,7 +2940,7 @@ public final class RunHub implements ServerService.EventListener {
                 final boolean tp = tersePref();
                 final Boolean told;
                 synchronized (styleTold) { told = styleTold.get(sid); }
-                String wire = TerseMode.wrap(q, tp, told);
+                String wire = TerseMode.wrap(MobileAgenticProtocol.wrap(q), tp, told);
                 final String recap = contextRepair(sid);   // P39: ride here too
                 if (recap != null) wire = recap + "\n\n" + wire;
                 final boolean anchorArmed = anchorPending(sid);   // P44
@@ -3161,7 +3161,7 @@ public final class RunHub implements ServerService.EventListener {
                 lastUserText = cap;
                 runHadOutput = false;
                 touchRun(sid);
-                List<String> bodies = buildMultiFileBodies(cap, urls, mimes, names,
+                List<String> bodies = buildMultiFileBodies(MobileAgenticProtocol.wrap(cap), urls, mimes, names,
                         Models.selected(appCtx), agent);
                 Api.Resp r = null;
                 for (String body : bodies) {
