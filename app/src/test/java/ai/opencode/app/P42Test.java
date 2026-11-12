@@ -95,6 +95,9 @@ public class P42Test {
         Map<String, Object> models = new LinkedHashMap<>();
         Map<String, Object> mdef = new LinkedHashMap<>();
         mdef.put("name", "test-model");
+        Map<String, Object> limit = new LinkedHashMap<>();
+        limit.put("output", 8_192L);
+        mdef.put("limit", limit);
         models.put("test-model", mdef);
         pdef.put("models", models);
         provs.put("prov", pdef);
