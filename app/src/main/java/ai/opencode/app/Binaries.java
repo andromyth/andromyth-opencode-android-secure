@@ -105,6 +105,41 @@ public final class Binaries {
         return new File(d, "opencode.json");
     }
 
+    /** Global OpenCode skill location inside the app-private HOME. */
+    static File mobileAgenticSkillFile(Context c) {
+        return new File(homeDir(c),
+                ".config/opencode/skills/mobile-agentic-master/SKILL.md");
+    }
+
+    /**
+     * Install the bundled Mobile Agentic Master skill on first server start.
+     * Existing files are preserved so user customizations are never replaced.
+     */
+    static void installMobileAgenticSkill(Context c) throws IOException {
+        File target = mobileAgenticSkillFile(c);
+        if (target.isFile()) return;
+        if (target.exists())
+            throw new IOException("skill destination exists but is not a file");
+        File parent = target.getParentFile();
+        if (!parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory())
+            throw new IOException("cannot create OpenCode skills directory");
+        File tmp = new File(parent, "SKILL.md.tmp");
+        try (InputStream in = c.getAssets().open("mobile-agentic-master/SKILL.md");
+             OutputStream out = new FileOutputStream(tmp)) {
+            byte[] buffer = new byte[8192];
+            int n;
+            while ((n = in.read(buffer)) != -1) out.write(buffer, 0, n);
+        }
+        if (target.exists()) {
+            tmp.delete();
+            return;
+        }
+        if (!tmp.renameTo(target)) {
+            tmp.delete();
+            throw new IOException("cannot install Mobile Agentic Master skill");
+        }
+    }
+
     /** Stream a SAF Uri into dst; returns bytes written. */
     public static long copyFromUri(Context c, Uri uri, File dst) throws IOException {
         File tmp = new File(dst.getParentFile(), dst.getName() + ".part");
