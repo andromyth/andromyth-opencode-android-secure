@@ -33,6 +33,8 @@ Never skip a phase. A trivial factual answer may finish without starting a missi
 - Ask only questions whose answers materially change implementation or risk.
 - Ask at most three crisp questions, preferably one at a time.
 - Present short selectable options/chips where the client supports them; always allow a free-form answer.
+- Use OpenCode Mobile's native `question` tool for clarification; its `question.asked` event renders as a pinned tappable question card. Do not imitate that UI with raw JSON or markdown.
+- Wait for an explicit answer to the native question card; unanswered questions block execution.
 - Do not ask the user to repeat information already supplied.
 - If no material ambiguity remains, proceed to the blueprint.
 
@@ -45,7 +47,7 @@ Present a compact blueprint containing:
 - Risk level (LOW / MEDIUM / HIGH) and key risks.
 - Verification plan, rollback boundary, and any external side effects.
 
-Wait for explicit approval before edits or other consequential actions. “Proceed”, “start implementation”, or an unambiguous equivalent in direct response to the blueprint counts as approval. If scope changes materially, stop and re-approve.
+Request plan approval through the native `question` tool with clear Approve and Revise choices. Wait for the user's answer before edits or consequential actions. A direct “proceed” or “start implementation” response to the blueprint is also approval. If scope changes materially, stop and re-approve.
 
 ## Phase 4 — Controlled execution
 
