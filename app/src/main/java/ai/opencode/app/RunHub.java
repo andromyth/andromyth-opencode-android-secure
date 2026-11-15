@@ -1488,7 +1488,12 @@ public final class RunHub implements ServerService.EventListener {
             } else if ("permission.asked".equals(type)
                     || "permission.updated".equals(type)
                     || "permission.v2.asked".equals(type)
-                    || "permission.v2.updated".equals(type)) {
+                    || "permission.v2.updated".equals(type)
+                    || "permission.queue.refreshed".equals(type)) {
+                // A queue refresh is emitted after reconnect-time HTTP
+                // seeding as well as live SSE permission events. Route both
+                // through the same renderer/auto-allow path so a resume
+                // race cannot leave a restored approval invisible.
                 // Unattended mode answers HERE — no screen required, the
                 // agent can never stall on an approval while the user is
                 // elsewhere (P14's flow only worked with the chat open).

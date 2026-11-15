@@ -2,6 +2,8 @@ package ai.opencode.app;
 
 import android.view.View;
 import android.widget.TextView;
+import android.widget.ScrollView;
+import android.widget.LinearLayout;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -86,9 +88,9 @@ public class ChatLayoutTest {
                     controls.findViewById(R.id.chipModel));
         }
     }
-    /** Large tool inputs must not push permission actions off-screen. */
+    /** Long permission payloads scroll independently; action targets keep equal width. */
     @Test
-    public void permissionCard_largeCommandKeepsActionsWithinBoundedPreview() throws Exception {
+    public void permissionCard_largeCommandKeepsActionsVisible() throws Exception {
         try (ActivityController<ChatActivity> ctl =
                      Robolectric.buildActivity(ChatActivity.class)) {
             ChatActivity a = ctl.setup().get();
@@ -104,14 +106,53 @@ public class ChatLayoutTest {
             build.setAccessible(true);
             android.view.View card = (android.view.View) build.invoke(a, permission);
             android.view.ViewGroup content = (android.view.ViewGroup) card;
-            TextView preview = (TextView) content.getChildAt(1);
+            ScrollView preview = (ScrollView) content.getChildAt(1);
+            TextView previewText = (TextView) preview.getChildAt(0);
             android.view.ViewGroup actions =
                     (android.view.ViewGroup) content.getChildAt(2);
 
-            assertEquals(6, preview.getMaxLines());
-            assertEquals(android.text.TextUtils.TruncateAt.END, preview.getEllipsize());
-            assertEquals("Deny, Allow for session, and Allow once remain available",
-                    3, actions.getChildCount());
+            assertTrue("preview viewport has a fixed height",
+                    preview.getLayoutParams().height > 0);
+            assertTrue("full preview remains independently scrollable",
+                    previewText.getText().length() > 1000);
+            assertTrue("preview text remains selectable", previewText.isTextSelectable());
+            assertEquals(3, actions.getChildCount());
+            for (int i = 0; i < actions.getChildCount(); i++) {
+                LinearLayout.LayoutParams lp =
+                        (LinearLayout.LayoutParams) actions.getChildAt(i).getLayoutParams();
+                assertEquals("all actions share the available width", 1f, lp.weight, 0f);
+            }
+        }
+    }
+
+    /** Returning from another app must repaint a permission already in the process queue. */
+    @Test
+    public void resume_rebuildsPendingPermissionCard() throws Exception {
+        java.lang.reflect.Field field = ServerService.class.getDeclaredField("PERMS");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        java.util.Queue<java.util.Map<String, Object>> queue =
+                (java.util.Queue<java.util.Map<String, Object>>) field.get(null);
+        queue.clear();
+        java.util.Map<String, Object> metadata = new java.util.HashMap<>();
+        metadata.put("command", "pwd");
+        java.util.Map<String, Object> permission = new java.util.HashMap<>();
+        permission.put("id", "resume-permission-test");
+        permission.put("permission", "external_directory");
+        permission.put("metadata", metadata);
+        queue.add(permission);
+        try (ActivityController<ChatActivity> ctl =
+                     Robolectric.buildActivity(ChatActivity.class)) {
+            ChatActivity a = ctl.setup().get();
+            android.view.View slot = a.findViewById(R.id.permSlot);
+            assertEquals(View.VISIBLE, slot.getVisibility());
+            ctl.pause().resume();
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+            assertEquals("permission card is restored after background/resume",
+                    View.VISIBLE, slot.getVisibility());
+            assertEquals(1, ((android.view.ViewGroup) slot).getChildCount());
+        } finally {
+            queue.clear();
         }
     }
 

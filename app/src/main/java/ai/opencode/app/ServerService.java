@@ -17,6 +17,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -1064,6 +1065,18 @@ public class ServerService extends Service {
         return null;
     }
 
+    private void notifyPermissionQueueChanged() {
+        if (evtListeners.isEmpty()) return;
+        Map<String, Object> ev = new HashMap<>();
+        ev.put("type", "permission.queue.refreshed");
+        ev.put("properties", new HashMap<String, Object>());
+        main.post(() -> {
+            for (EventListener l : evtListeners) {
+                try { l.onEvent(ev); } catch (Throwable ignored) { }
+            }
+        });
+    }
+
     /** GET /permission (v1) — and v2 /api/permission/request as fallback —
      *  server's own list of pending permission requests. */
     private void seedPermissions() {
@@ -1088,8 +1101,14 @@ public class ServerService extends Service {
                     added = true;
                 }
             }
-            if (added && evtListeners.isEmpty()) {
-                updateNotif("⚠ permission requested — open OpenCode to review");
+            if (added) {
+                // A resume may have checked the local queue before this
+                // SSE reconnect completed. Notify the process-lifetime hub
+                // after seeding so a bound chat paints the recovered ask.
+                notifyPermissionQueueChanged();
+                if (evtListeners.isEmpty()) {
+                    updateNotif("⚠ permission requested — open OpenCode to review");
+                }
             }
         } catch (Exception ignored) {}
     }
