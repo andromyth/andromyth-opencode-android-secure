@@ -529,6 +529,19 @@ public class ChatActivity extends Activity
         // P16: returning from API keys with the model sheet open → refresh
         // the rows IN PLACE, so the provider whose key was just added goes
         // bright/ready without closing and reopening the picker.
+    @Override
+    protected void onPostResume() {
+        super.onPostResume();
+        // Reconcile pinned interaction surfaces after the activity has
+        // completed its resume transition. The SSE reconnect path also
+        // signals when it discovers server-side pending permissions.
+        if (isFinishing() || isDestroyed()) return;
+        checkPermissionQueue();
+        checkQuestionQueue();
+        refreshServerUi();
+        applyBusyUi(RunHub.busyFor(RunHub.displayedSession()));
+    }
+
         if (keysFromSheet) {
             keysFromSheet = false;
             if (modelDlg != null && modelDlg.showing() && !isFinishing()
@@ -3656,21 +3669,26 @@ public class ChatActivity extends Activity
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         c.addView(head);
 
+        // The command can contain thousands of lines (e.g. Smali). Keep
+        // the preview in its own bounded scroll viewport so it can never
+        // push the approval actions or composer off-screen.
+        ScrollView detailScroll = new ScrollView(this);
+        detailScroll.setFillViewport(false);
+        detailScroll.setVerticalScrollBarEnabled(true);
+        detailScroll.setBackground(Theme.codeWell(this));
         TextView d = mono(text(12, R.color.text_secondary, false), 12);
         String dt = detail.toString();
-        if (dt.length() > 1500) dt = dt.substring(0, 1500) + "…";
+        if (dt.length() > 6000) dt = dt.substring(0, 6000) + "\n… preview truncated";
         d.setText(dt);
-        // Keep oversized shell/Smali previews from pushing the approval
-        // actions below the viewport on small Android screens.
-        d.setMaxLines(6);
-        d.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        d.setBackground(Theme.codeWell(this));
+        d.setTextIsSelectable(true);
         int dpc = dp(10);
         d.setPadding(dpc, dpc, dpc, dpc);
+        detailScroll.addView(d, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(116));
         dlp.topMargin = dp(10);
-        c.addView(d, dlp);
+        c.addView(detailScroll, dlp);
 
         LinearLayout btns = new LinearLayout(this);
         btns.setOrientation(LinearLayout.HORIZONTAL);
@@ -3680,17 +3698,19 @@ public class ChatActivity extends Activity
         blp.topMargin = dp(12);
 
         TextView deny = permButton("Deny", "reject", Theme.denyPill(this), id, R.color.err, null);
-        btns.addView(deny);
+        LinearLayout.LayoutParams denyLp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        btns.addView(deny, denyLp);
         TextView always = permButton("Allow for session", "always", Theme.outlinePill(this), id, R.color.accent_light, perm);
-        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        alp.leftMargin = dp(8);
-        btns.addView(always, alp);
+        LinearLayout.LayoutParams alwaysLp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        alwaysLp.leftMargin = dp(6);
+        btns.addView(always, alwaysLp);
         TextView allow = permButton("Allow once", "once", Theme.allowPill(this), id, R.color.on_accent, null);
-        LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        vlp.leftMargin = dp(8);
-        btns.addView(allow, vlp);
+        LinearLayout.LayoutParams allowLp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        allowLp.leftMargin = dp(6);
+        btns.addView(allow, allowLp);
         c.addView(btns);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -3705,12 +3725,13 @@ public class ChatActivity extends Activity
     private TextView permButton(String label, String response,
                                 android.graphics.drawable.Drawable bg, String id, int colorRes,
                                 Map<String, Object> permissionScope) {
-        TextView b = text(13, colorRes, true);
+        TextView b = text(11, colorRes, true);
         b.setText(label);
         b.setBackground(bg);
         b.setGravity(Gravity.CENTER);
-        int p = dp(16);
-        b.setPadding(p, dp(11), p, dp(11));
+        b.setMinHeight(dp(48));
+        int p = dp(5);
+        b.setPadding(p, dp(8), p, dp(8));
         b.setOnClickListener(v -> {
             Theme.haptic(v);
             Theme.pop(b);
