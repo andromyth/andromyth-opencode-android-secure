@@ -284,11 +284,12 @@ public final class Binaries {
             throw new IOException("selected project directory is unavailable");
         File state = new File(new File(c.getFilesDir(), "project-state"),
                 projectStorageKey(projectDir));
+        File projectHome = new File(state, "home");
         File data = new File(state, "data");
         File cache = new File(state, "cache");
         File tmp = new File(state, "tmp");
         File status = new File(state, "state");
-        for (File dir : new File[]{data, cache, tmp, status}) {
+        for (File dir : new File[]{projectHome, data, cache, tmp, status}) {
             if (!dir.isDirectory() && !dir.mkdirs() && !dir.isDirectory())
                 throw new IOException("cannot create project state directory: " + dir);
         }
@@ -313,6 +314,7 @@ public final class Binaries {
         }
 
         java.util.Map<String, String> env = pb.environment();
+        env.put("HOME", projectHome.getAbsolutePath());
         env.put("XDG_DATA_HOME", data.getAbsolutePath());
         env.put("XDG_CACHE_HOME", cache.getAbsolutePath());
         env.put("XDG_STATE_HOME", status.getAbsolutePath());
