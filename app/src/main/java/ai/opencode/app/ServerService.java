@@ -484,8 +484,8 @@ public class ServerService extends Service {
             updateNotif("project storage unavailable");
             return;
         }
-        // Install the globally discoverable skill into the same HOME passed to
-        // OpenCode via Binaries.applyEnv. Preserve any user-edited copy.
+        // Install the globally discoverable skill under the shared
+        // XDG_CONFIG_HOME. Preserve any user-edited copy.
         try {
             Binaries.installMobileAgenticSkill(this);
         } catch (Throwable t) {
