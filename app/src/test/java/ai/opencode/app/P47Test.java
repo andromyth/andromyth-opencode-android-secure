@@ -225,6 +225,33 @@ public class P47Test {
         assertEquals(1, t.rows.size());
     }
 
+
+    @Test public void onEvent_permissionQueueRefreshNotifiesBoundUi() {
+        final int[] calls = {0};
+        RunHub.Ui probe = new RunHub.Ui() {
+            @Override public void hubRow(String key) {}
+            @Override public void hubBusy(boolean busy) {}
+            @Override public void hubSpend() {}
+            @Override public void hubTitle() {}
+            @Override public void hubPerms() { calls[0]++; }
+            @Override public void hubQuestions() {}
+            @Override public void hubLive() {}
+            @Override public void hubReset() {}
+        };
+        RunHub.bindUi(probe);
+        try {
+            Map<String, Object> ev = new java.util.LinkedHashMap<>();
+            ev.put("type", "permission.queue.refreshed");
+            ev.put("properties", new java.util.LinkedHashMap<String, Object>());
+            RunHub.HUB.onEvent(ev);
+            Shadows.shadowOf(Looper.getMainLooper()).idle();
+            assertEquals("reconnected pending requests must repaint the bound UI",
+                    1, calls[0]);
+        } finally {
+            RunHub.unbindUi(probe);
+        }
+    }
+
     // ============================== 5. Git shim: FUSE repo tuning
 
     @Test public void gitShim_tunesFreshFuseRepos() throws Exception {
