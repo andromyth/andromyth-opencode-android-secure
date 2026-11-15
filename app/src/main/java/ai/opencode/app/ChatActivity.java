@@ -3660,6 +3660,10 @@ public class ChatActivity extends Activity
         String dt = detail.toString();
         if (dt.length() > 1500) dt = dt.substring(0, 1500) + "…";
         d.setText(dt);
+        // Keep oversized shell/Smali previews from pushing the approval
+        // actions below the viewport on small Android screens.
+        d.setMaxLines(6);
+        d.setEllipsize(android.text.TextUtils.TruncateAt.END);
         d.setBackground(Theme.codeWell(this));
         int dpc = dp(10);
         d.setPadding(dpc, dpc, dpc, dpc);

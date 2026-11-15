@@ -86,4 +86,33 @@ public class ChatLayoutTest {
                     controls.findViewById(R.id.chipModel));
         }
     }
+    /** Large tool inputs must not push permission actions off-screen. */
+    @Test
+    public void permissionCard_largeCommandKeepsActionsWithinBoundedPreview() throws Exception {
+        try (ActivityController<ChatActivity> ctl =
+                     Robolectric.buildActivity(ChatActivity.class)) {
+            ChatActivity a = ctl.setup().get();
+            java.util.Map<String, Object> metadata = new java.util.HashMap<>();
+            metadata.put("command", new String(new char[8000]).replace('\0', 'x'));
+            java.util.Map<String, Object> permission = new java.util.HashMap<>();
+            permission.put("id", "permission-test");
+            permission.put("permission", "external_directory");
+            permission.put("metadata", metadata);
+
+            java.lang.reflect.Method build = ChatActivity.class.getDeclaredMethod(
+                    "buildPermCard", java.util.Map.class);
+            build.setAccessible(true);
+            android.view.View card = (android.view.View) build.invoke(a, permission);
+            android.view.ViewGroup content = (android.view.ViewGroup) card;
+            TextView preview = (TextView) content.getChildAt(1);
+            android.view.ViewGroup actions =
+                    (android.view.ViewGroup) content.getChildAt(2);
+
+            assertEquals(6, preview.getMaxLines());
+            assertEquals(android.text.TextUtils.TruncateAt.END, preview.getEllipsize());
+            assertEquals("Deny, Allow for session, and Allow once remain available",
+                    3, actions.getChildCount());
+        }
+    }
+
 }
