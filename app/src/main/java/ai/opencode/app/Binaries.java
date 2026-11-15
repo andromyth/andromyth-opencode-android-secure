@@ -297,6 +297,11 @@ public final class Binaries {
         if (!opencode.isDirectory() && !opencode.mkdirs() && !opencode.isDirectory())
             throw new IOException("cannot create project OpenCode data directory");
         File sharedAuth = authFile(c);
+        if (!sharedAuth.exists()) {
+            try (OutputStream out = new FileOutputStream(sharedAuth)) {
+                out.write("{}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+        }
         File projectAuth = new File(opencode, "auth.json");
         if (!projectAuth.exists()) {
             try {
