@@ -529,19 +529,6 @@ public class ChatActivity extends Activity
         // P16: returning from API keys with the model sheet open → refresh
         // the rows IN PLACE, so the provider whose key was just added goes
         // bright/ready without closing and reopening the picker.
-    @Override
-    protected void onPostResume() {
-        super.onPostResume();
-        // Reconcile pinned interaction surfaces after the activity has
-        // completed its resume transition. The SSE reconnect path also
-        // signals when it discovers server-side pending permissions.
-        if (isFinishing() || isDestroyed()) return;
-        checkPermissionQueue();
-        checkQuestionQueue();
-        refreshServerUi();
-        applyBusyUi(RunHub.busyFor(RunHub.displayedSession()));
-    }
-
         if (keysFromSheet) {
             keysFromSheet = false;
             if (modelDlg != null && modelDlg.showing() && !isFinishing()
@@ -562,6 +549,19 @@ public class ChatActivity extends Activity
                 });
             }
         }
+    }
+
+    @Override
+    protected void onPostResume() {
+        super.onPostResume();
+        // Reconcile pinned interaction surfaces after the activity has
+        // completed its resume transition. The SSE reconnect path also
+        // signals when it discovers server-side pending permissions.
+        if (isFinishing() || isDestroyed()) return;
+        checkPermissionQueue();
+        checkQuestionQueue();
+        refreshServerUi();
+        applyBusyUi(RunHub.busyFor(RunHub.displayedSession()));
     }
 
     /** P16 DeX: hardware-keyboard shortcuts (desktop-opencode muscle
