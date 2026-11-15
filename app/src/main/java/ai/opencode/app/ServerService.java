@@ -468,10 +468,21 @@ public class ServerService extends Service {
         pb.directory(cwd);
         pb.redirectErrorStream(true);
         try {
-            Binaries.applyEnv(this, pb);   // P23: was unguarded — a throw here
-        } catch (Throwable t) {            // killed the supervisor thread
+            Binaries.applyEnv(this, pb);
+        } catch (Throwable t) {
             Trail.record(this, "sandbox env", t);
             appendDiag("env", "applyEnv failed: " + t);
+        }
+        // Mutable OpenCode state (sessions, storage, cache) is namespaced
+        // by the selected project. Credentials/config remain app-managed.
+        try {
+            Binaries.applyProjectEnv(this, pb, cwd);
+        } catch (Throwable t) {
+            Trail.record(this, "project storage", t);
+            appendDiag("project-storage", "isolation setup failed: " + t);
+            setState(ST_EXITED, "project storage isolation failed");
+            updateNotif("project storage unavailable");
+            return;
         }
         // Install the globally discoverable skill into the same HOME passed to
         // OpenCode via Binaries.applyEnv. Preserve any user-edited copy.
