@@ -255,6 +255,65 @@ public final class Binaries {
         }
     }
 
+    /** Stable per-project namespace for OpenCode's mutable data store. */
+    static String projectStorageKey(File projectDir) throws IOException {
+        if (projectDir == null) throw new IOException("project directory is null");
+        String canonical = projectDir.getCanonicalPath();
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(canonical.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder key = new StringBuilder(64);
+            for (byte b : digest) key.append(String.format(java.util.Locale.US, "%02x", b & 0xff));
+            return key.toString();
+        } catch (Exception e) {
+            throw new IOException("cannot identify project storage", e);
+        }
+    }
+
+    /**
+     * Separate OpenCode's sessions/storage/cache for each project while
+     * retaining the app-managed shared credentials and config.
+     *
+     * OpenCode stores mutable session data below XDG_DATA_HOME/opencode.
+     * auth.json remains the app's single shared credential file via a
+     * private symlink; project storage itself never falls back to global HOME.
+     */
+    public static void applyProjectEnv(Context c, ProcessBuilder pb, File projectDir)
+            throws IOException {
+        if (projectDir == null || !projectDir.isDirectory())
+            throw new IOException("selected project directory is unavailable");
+        File state = new File(new File(c.getFilesDir(), "project-state"),
+                projectStorageKey(projectDir));
+        File data = new File(state, "data");
+        File cache = new File(state, "cache");
+        File tmp = new File(state, "tmp");
+        File status = new File(state, "state");
+        for (File dir : new File[]{data, cache, tmp, status}) {
+            if (!dir.isDirectory() && !dir.mkdirs() && !dir.isDirectory())
+                throw new IOException("cannot create project state directory: " + dir);
+        }
+
+        File opencode = new File(data, "opencode");
+        if (!opencode.isDirectory() && !opencode.mkdirs() && !opencode.isDirectory())
+            throw new IOException("cannot create project OpenCode data directory");
+        File sharedAuth = authFile(c);
+        File projectAuth = new File(opencode, "auth.json");
+        if (!projectAuth.exists()) {
+            try {
+                android.system.Os.symlink(sharedAuth.getAbsolutePath(),
+                        projectAuth.getAbsolutePath());
+            } catch (Exception e) {
+                throw new IOException("cannot link shared OpenCode credentials", e);
+            }
+        }
+
+        java.util.Map<String, String> env = pb.environment();
+        env.put("XDG_DATA_HOME", data.getAbsolutePath());
+        env.put("XDG_CACHE_HOME", cache.getAbsolutePath());
+        env.put("XDG_STATE_HOME", status.getAbsolutePath());
+        env.put("TMPDIR", tmp.getAbsolutePath());
+    }
+
     /** Build the process environment opencode expects inside the app sandbox. */
     public static void applyEnv(Context c, ProcessBuilder pb) {
         String home = homeDir(c).getAbsolutePath();
