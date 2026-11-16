@@ -1,6 +1,6 @@
 # OpenCode Android Secure Build
 
-This repository contains the Android application source built on the official OpenCode project, with project-specific Android integration and local security hardening. It is not derived from the third-party `turanmertkaraca-bit/opencode-android` repository. The official OpenCode native payload is restored during CI from its pinned release artifact only after validating the published SHA-256, so a large generated binary is not committed to Git.
+This repository contains the Android application source built on the official OpenCode project, with project-specific Android integration and local security hardening. The native OpenCode payload is restored during CI from its pinned upstream release artifact only after validating the published SHA-256, so a large generated binary is not committed to Git.
 
 ## Build and checks
 
