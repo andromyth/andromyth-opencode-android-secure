@@ -395,6 +395,10 @@ public class ChatActivity extends Activity
             } else {
                 String q = input.getText().toString().trim();
                 if (q.isEmpty() && pendingAttach.isEmpty()) return;
+                if (pendingAttach.isEmpty() && handleSlashInput(q)) {
+                    input.setText("");
+                    return;
+                }
                 Theme.pop(btnSend);          // P8 micro-anim: the send button springs
                 if (!pendingAttach.isEmpty()) {
                     List<PendingImg> ship = new ArrayList<>(pendingAttach);
@@ -4131,6 +4135,27 @@ public class ChatActivity extends Activity
             runCommand(visible.get(pos));
         });
         sh.focus(filter);
+    }
+
+    /** Slash commands are intercepted before the normal prompt path. */
+    private boolean handleSlashInput(String raw) {
+        if (raw == null || !raw.trim().startsWith("/")) return false;
+        String line = raw.trim();
+        String name = line.substring(1).split("\\s+", 2)[0].toLowerCase(Locale.US);
+        switch (name) {
+            case "new": runCommand("New chat"); return true;
+            case "sessions": runCommand("Sessions…"); return true;
+            case "model":
+            case "models": runCommand("Model…"); return true;
+            case "compact": return RunHub.handleSlashCommand(line);
+            case "undo":
+            case "redo":
+            case "init":
+            case "review":
+                return RunHub.handleSlashCommand(line);
+            default:
+                return RunHub.handleSlashCommand(line);
+        }
     }
 
     private void runCommand(String cmd) {

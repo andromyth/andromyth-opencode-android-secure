@@ -2546,6 +2546,102 @@ public final class RunHub implements ServerService.EventListener {
         }
     }
 
+    // ------------------------------------------------ native slash commands
+
+    /** Execute a native OpenCode slash command. Returns true when the input
+     *  was consumed; slash commands are never sent as ordinary user prompts. */
+    public static boolean handleSlashCommand(String raw) {
+        final String line = raw == null ? "" : raw.trim();
+        if (!line.startsWith("/") || line.length() < 2) return false;
+        final String[] split = line.substring(1).split("\\s+", 2);
+        final String name = split[0].toLowerCase(Locale.US);
+        final String args = split.length > 1 ? split[1] : "";
+        if ("compact".equals(name)) { compact(); return true; }
+        if (!"undo".equals(name) && !"redo".equals(name)) {
+            IO.execute(() -> executeServerCommand(name, args));
+            return true;
+        }
+        final String sid = displayedSession();
+        if (sid == null || sid.isEmpty()) {
+            sys("slash command requires an active session");
+            return true;
+        }
+        if (busyFor(sid)) {
+            sys("wait for this session's run to finish before /" + name);
+            return true;
+        }
+        IO.execute(() -> {
+            try {
+                if ("redo".equals(name)) {
+                    Api.Resp r = Api.post("/session/" + sid + "/unrevert", "{}", 20_000);
+                    if (r.ok()) sys("↻ reverted changes restored");
+                    else sys(" /redo failed · HTTP " + r.status + " " + r.body);
+                    return;
+                }
+                Api.Resp messages = Api.get("/session/" + sid + "/message?limit=100");
+                if (!messages.ok()) {
+                    sys("/undo could not read session history · HTTP " + messages.status);
+                    return;
+                }
+                org.json.JSONArray rows = new org.json.JSONArray(messages.body);
+                String messageId = null;
+                for (int i = rows.length() - 1; i >= 0; i--) {
+                    org.json.JSONObject row = rows.optJSONObject(i);
+                    org.json.JSONObject info = row == null ? null : row.optJSONObject("info");
+                    if (info != null && "user".equals(info.optString("role"))) {
+                        messageId = info.optString("id", null);
+                        if (messageId != null && !messageId.isEmpty()) break;
+                    }
+                }
+                if (messageId == null) {
+                    sys("/undo found no user message to revert");
+                    return;
+                }
+                Api.Resp r = Api.post("/session/" + sid + "/revert",
+                        "{\"messageID\":" + Json.quote(messageId) + "}", 30_000);
+                if (r.ok()) sys("↶ last user turn reverted; use /redo to restore it");
+                else sys("/undo failed · HTTP " + r.status + " " + r.body);
+            } catch (Throwable e) {
+                sys("slash command failed · " + Resilience.prettyNetError(e));
+            }
+        });
+        return true;
+    }
+
+    /** Execute a server-registered command only after checking the server's
+     *  own command registry; never pass an unknown slash command to the model. */
+    private static void executeServerCommand(String name, String arguments) {
+        try {
+            String sid = ensureSession();
+            if (sid == null) { sys("server is not ready; try the command again"); return; }
+            if (busyFor(sid)) { sys("wait for this session's run to finish first"); return; }
+            Api.Resp list = Api.get("/command");
+            if (!list.ok()) { sys("server command registry unavailable · HTTP " + list.status); return; }
+            org.json.JSONArray commands = new org.json.JSONArray(list.body);
+            boolean found = false;
+            for (int i = 0; i < commands.length(); i++) {
+                org.json.JSONObject item = commands.optJSONObject(i);
+                if (item != null && name.equalsIgnoreCase(item.optString("name"))) {
+                    found = true; break;
+                }
+            }
+            if (!found) { sys("unknown OpenCode command: /" + name + " · use ⌘ to browse app commands"); return; }
+            org.json.JSONObject body = new org.json.JSONObject();
+            body.put("command", name);
+            body.put("arguments", arguments);
+            body.put("agent", agent);
+            Api.Resp r = Api.post("/session/" + sid + "/command", body.toString(), 900_000);
+            if (!r.ok()) sys("/" + name + " failed · HTTP " + r.status + " " + r.body);
+            else {
+                reconcile(r.body);
+                H.removeCallbacks(watchdog);
+                H.postDelayed(watchdog, 1500);
+            }
+        } catch (Throwable e) {
+            sys("slash command failed · " + Resilience.prettyNetError(e));
+        }
+    }
+
     // ------------------------------------------------------- send path
 
     /** The send button. Full orchestration, hub-owned: the POST holds an
