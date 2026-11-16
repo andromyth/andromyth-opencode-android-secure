@@ -1438,10 +1438,17 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
             checking.accept("pkg");
             sb.append("pkg: ").append(which("pkg") ? "available" : "missing").append('\n');
 
-            // P12 evidence probe: does the DYNAMIC musl loader survive this
-            // device's seccomp? (P11 screenshot showed SIGSYS on `ls`.)
+            // Separate static Android-compatible applets from the optional dynamic Alpine loader.
+            checking.accept("static BusyBox applets");
+            sb.append("static BusyBox: ").append(staticBusyboxProbe()).append('\n');
+
             checking.accept("musl loader (dynamic)");
             sb.append("musl loader: ").append(muslProbe()).append('\n');
+
+            String preflight = Debian.preflightReport(this);
+            if (!preflight.isEmpty()) {
+                sb.append("Debian preflight detail:\n").append(preflight).append('\n');
+            }
 
             checking.accept("debian proot");
             if (Debian.extracted(this)) {
@@ -1507,6 +1514,27 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
      * "Bad system call" → seccomp kills dynamic musl (static applets now
      * shadow them, so the shell still works).
      */
+    private String staticBusyboxProbe() {
+        File bb = new File(Shims.binDir(this), "busybox");
+        if (!bb.isFile() || !bb.canExecute()) return "not installed or not executable";
+        try {
+            ProcessBuilder pb = new ProcessBuilder(bb.getAbsolutePath(), "echo", "oc-static-probe");
+            pb.redirectErrorStream(true);
+            Binaries.applyEnv(this, pb);
+            Process p = pb.start();
+            if (!p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                return "timed out";
+            }
+            String out = Api.readAll(p.getInputStream()).trim();
+            return p.exitValue() == 0 && out.contains("oc-static-probe")
+                    ? "working" : "failed rc=" + p.exitValue()
+                            + (out.isEmpty() ? "" : " · " + lastLine(out));
+        } catch (Exception e) {
+            return "spawn failed · " + e.getClass().getSimpleName();
+        }
+    }
+
     private String muslProbe() {
         if (!Sandbox.ready(this)) return "toolkit not installed";
         File al = Sandbox.alpineDir(this);
@@ -1519,13 +1547,19 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
             pb.redirectErrorStream(true);
             Binaries.applyEnv(this, pb);
             Process p = pb.start();
-            String o = Api.readAll(p.getInputStream()).trim();
-            if (!p.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)) p.destroy();
+            if (!p.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                p.waitFor(1, java.util.concurrent.TimeUnit.SECONDS);
+                String output = Api.readAll(p.getInputStream()).trim();
+                return "timed out" + (output.isEmpty() ? "" : " · " + lastLine(output));
+            }
+            String output = Api.readAll(p.getInputStream()).trim();
             int rc = p.exitValue();
-            if (rc == 0 && o.contains("oc-envprobe")) return "ok";
-            return "exit " + rc + (o.isEmpty() ? "" : " · " + lastLine(o));
+            if (rc == 0 && output.contains("oc-envprobe")) return "working";
+            if (rc == 159) return "blocked by Android seccomp (SIGSYS, exit 159); static BusyBox fallback remains available";
+            return "failed rc=" + rc + (output.isEmpty() ? "" : " · " + lastLine(output));
         } catch (Exception e) {
-            return "spawn failed · " + e.getClass().getSimpleName();
+            return "spawn failed · " + e.getClass().getSimpleName() + ": " + e.getMessage();
         }
     }
 
