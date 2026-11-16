@@ -103,4 +103,11 @@ public class DebianBootstrapTest {
         assertTrue(command.contains("export DEBIAN_FRONTEND=noninteractive"));
     }
 
+    @Test
+    public void preflightFailureLabel_identifiesAndroidSeccompSignal() {
+        assertTrue(Debian.preflightFailureLabel(159).contains("SIGSYS"));
+        assertTrue(Debian.preflightFailureLabel(139).contains("SIGSEGV"));
+        assertTrue(Debian.preflightFailureLabel(126).contains("execution denied"));
+    }
+
 }
