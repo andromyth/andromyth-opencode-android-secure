@@ -403,11 +403,20 @@ public class ChatActivity extends Activity
                 if (!pendingAttach.isEmpty()) {
                     List<PendingImg> ship = new ArrayList<>(pendingAttach);
                     List<RunHub.FilePart> files = new ArrayList<>();
-                    for (PendingImg p : ship)
+                    List<File> images = new ArrayList<>();
+                    boolean imagesOnly = true;
+                    for (PendingImg p : ship) {
                         files.add(new RunHub.FilePart(p.file, p.mime, p.name));
+                        if (p.image) images.add(p.file);
+                        else imagesOnly = false;
+                    }
                     clearAttach(false);      // tray clears; files live on for the hub
                     input.setText("");
-                    RunHub.sendWithFiles(files, q);
+                    // Image-only sends use the vision-aware path: it retries
+                    // through a free vision model if the selected model cannot
+                    // accept image input. Mixed/document sends retain native files.
+                    if (imagesOnly) RunHub.sendWithAttachments(images, q);
+                    else RunHub.sendWithFiles(files, q);
                 } else {
                     input.setText("");
                     RunHub.send(q);          // hub-owned: the run outlives this screen
