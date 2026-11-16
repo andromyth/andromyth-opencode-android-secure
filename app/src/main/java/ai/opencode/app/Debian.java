@@ -332,7 +332,7 @@ public final class Debian {
             env.put("PROOT_LOADER", new File(binDir(c), "loader").getAbsolutePath());
             env.put("PROOT_TMP_DIR", new File(dir(c), "tmp").getAbsolutePath());
             env.put("LD_LIBRARY_PATH", libDir(c).getAbsolutePath());
-            env.put("PROOT_NO_SECCOMP", "1");
+            enableAndroidSeccompCompatibility(env);
             env.put("PROOT_IGNORE_MISSING_BINDINGS", "1");
 
             p = pb.start();
@@ -367,6 +367,11 @@ public final class Debian {
         } finally {
             if (p != null && p.isAlive()) p.destroyForcibly();
         }
+    }
+
+    /** PRoot must retain its Android syscall-translation seccomp filter. */
+    static void enableAndroidSeccompCompatibility(Map<String, String> env) {
+        env.remove("PROOT_NO_SECCOMP");
     }
 
     static String preflightFailureLabel(int rc) {
@@ -771,7 +776,7 @@ public final class Debian {
         e.put("PROOT_TMP_DIR", new File(dir(c), "tmp").getAbsolutePath());
         e.put("LD_LIBRARY_PATH", libDir(c).getAbsolutePath());
         e.put("PROOT_IGNORE_MISSING_BINDINGS", "1");
-        e.put("PROOT_NO_SECCOMP", "1"); // belt: some kernels misreport seccomp
+        enableAndroidSeccompCompatibility(e);
         // --- guest-side env (proot passes the host env through) ---
         int pp = ProxyServer.ensureStarted(c);
         if (pp > 0) {
@@ -886,9 +891,8 @@ public final class Debian {
              .append("PROOT_TMP_DIR=\"").append(new File(dir(c), "tmp").getAbsolutePath()).append("\"\n")
              .append("LD_LIBRARY_PATH=\"").append(lib).append("\"\n")
              .append("PROOT_IGNORE_MISSING_BINDINGS=1\n")
-             .append("PROOT_NO_SECCOMP=1\n")
              .append("export PROOT_LOADER PROOT_TMP_DIR LD_LIBRARY_PATH")
-             .append(" PROOT_IGNORE_MISSING_BINDINGS PROOT_NO_SECCOMP\n");
+             .append(" PROOT_IGNORE_MISSING_BINDINGS\n");
             int pp = ProxyServer.ensureStarted(c);
             if (pp > 0) {
                 String px = "http://127.0.0.1:" + pp;
