@@ -317,8 +317,8 @@ public final class Debian {
     static boolean preflightProot(Context c, Progress cb) {
         ensureDirs(c);
         Process p = null;
+        ArrayList<String> argv = new ArrayList<>();
         try {
-            ArrayList<String> argv = new ArrayList<>();
             argv.add(new File(binDir(c), "proot").getAbsolutePath());
             argv.add("-0");
             argv.add("--link2symlink");
@@ -339,30 +339,68 @@ public final class Debian {
             boolean finished = p.waitFor(20, TimeUnit.SECONDS);
             if (!finished) {
                 p.destroyForcibly();
-                say(cb, "proot host preflight timed out");
+                p.waitFor(2, TimeUnit.SECONDS);
+                String output = Api.readAll(p.getInputStream());
+                writePreflightReport(c, "timeout after 20 seconds", argv, output);
+                say(cb, "proot host preflight timed out; details saved for Sandbox doctor");
                 return false;
             }
             String output = Api.readAll(p.getInputStream());
-            boolean ok = p.exitValue() == 0 && output.contains("probe-ok");
+            int rc = p.exitValue();
+            boolean ok = rc == 0 && output.contains("probe-ok");
             if (ok) {
+                new File(dir(c), "preflight-report.txt").delete();
                 say(cb, "proot host preflight passed");
             } else {
-                writeText(new File(dir(c), "preflight-report.txt"),
-                        "rc=" + p.exitValue() + "\\nargv="
-                        + String.join(" ", argv) + "\\n" + output);
-                say(cb, "proot host preflight failed (rc="
-                        + p.exitValue() + "): " + output);
+                String failure = preflightFailureLabel(rc);
+                writePreflightReport(c, "exit=" + rc + " (" + failure + ")", argv, output);
+                say(cb, "proot host preflight failed: " + failure
+                        + " — details saved for Sandbox doctor");
             }
             return ok;
         } catch (Exception e) {
-            try {
-                writeText(new File(dir(c), "preflight-report.txt"),
-                        "proot host preflight exception: " + e + "\\n");
-            } catch (Exception ignored) {}
-            say(cb, "proot host preflight failed: " + e);
+            writePreflightReport(c, "exception=" + e.getClass().getSimpleName()
+                    + ": " + e.getMessage(), argv, "");
+            say(cb, "proot host preflight failed: " + e.getClass().getSimpleName()
+                    + " — details saved for Sandbox doctor");
             return false;
         } finally {
             if (p != null && p.isAlive()) p.destroyForcibly();
+        }
+    }
+
+    static String preflightFailureLabel(int rc) {
+        if (rc == 159) return "SIGSYS (system call blocked by Android kernel policy)";
+        if (rc == 139) return "SIGSEGV (native process crashed)";
+        if (rc == 126) return "execution denied (permission or executable format)";
+        if (rc == 127) return "executable or required loader not found";
+        if (rc < 0) return "process did not return an exit status";
+        return "process exited unsuccessfully";
+    }
+
+    private static void writePreflightReport(Context c, String result,
+                                             List<String> argv, String output) {
+        try {
+            StringBuilder report = new StringBuilder();
+            report.append("result: ").append(result).append('\n');
+            report.append("command: ").append(String.join(" ", argv)).append('\n');
+            report.append("PROOT_LOADER: ").append(new File(binDir(c), "loader").getAbsolutePath()).append('\n');
+            report.append("PROOT_TMP_DIR: ").append(new File(dir(c), "tmp").getAbsolutePath()).append('\n');
+            report.append("LD_LIBRARY_PATH: ").append(libDir(c).getAbsolutePath()).append('\n');
+            report.append("output:\n").append(output == null ? "" : output);
+            writeText(new File(dir(c), "preflight-report.txt"), report.toString());
+        } catch (Exception ignored) {}
+    }
+
+    /** Last host-side preflight evidence, surfaced by Settings → Sandbox doctor. */
+    public static String preflightReport(Context c) {
+        File report = new File(dir(c), "preflight-report.txt");
+        if (!report.isFile()) return "";
+        try {
+            return new String(java.nio.file.Files.readAllBytes(report.toPath()),
+                    StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            return "report unreadable: " + e.getClass().getSimpleName();
         }
     }
 
