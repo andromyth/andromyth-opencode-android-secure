@@ -2621,7 +2621,7 @@ public final class RunHub implements ServerService.EventListener {
                 // mode the shell actually lands in today.
                 final String eNote = EnvNote.needsNote(eTold)
                         ? EnvNote.note(appCtx) : null;
-                String wire = TerseMode.wrap(MobileAgenticProtocol.wrap(text), tp, told);
+                String wire = TerseMode.wrap(text, tp, told);
                 if (eNote != null) wire = eNote + "\n\n" + wire;
                 if (rNote != null) wire = rNote + "\n\n" + wire;
                 // P39: context repair rides FIRST (outermost block) when the
