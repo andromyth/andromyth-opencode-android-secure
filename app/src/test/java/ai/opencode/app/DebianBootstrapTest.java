@@ -10,6 +10,8 @@ import org.robolectric.annotation.Config;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -101,6 +103,14 @@ public class DebianBootstrapTest {
         assertTrue(command.contains("/usr/bin/perl -e"));
         assertFalse(command.contains("apt-get install -y --no-install-recommends debconf"));
         assertTrue(command.contains("export DEBIAN_FRONTEND=noninteractive"));
+    }
+
+    @Test
+    public void prootEnvironmentKeepsAndroidSeccompCompatibilityEnabled() {
+        Map<String, String> env = new HashMap<>();
+        env.put("PROOT_NO_SECCOMP", "1");
+        Debian.enableAndroidSeccompCompatibility(env);
+        assertFalse(env.containsKey("PROOT_NO_SECCOMP"));
     }
 
     @Test
