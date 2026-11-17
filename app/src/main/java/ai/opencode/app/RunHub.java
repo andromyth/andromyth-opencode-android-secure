@@ -3306,17 +3306,17 @@ public final class RunHub implements ServerService.EventListener {
         if (files == null || relativePaths == null || files.size() != relativePaths.size())
             throw new IOException("attachment metadata is incomplete");
         StringBuilder body = new StringBuilder();
-        body.append("{\\"text\\":").append(Json.quote(caption))
-                .append(",\\"files\\":[");
+        body.append("{\"text\":").append(Json.quote(caption))
+                .append(",\"files\":[");
         for (int i = 0; i < files.size(); i++) {
             if (i > 0) body.append(',');
             FilePart part = files.get(i);
             File uriFile = new File(ServerService.servingDir(), relativePaths.get(i));
             String uri = uriFile.toURI().toString();
-            body.append("{\\"uri\\":").append(Json.quote(uri))
-                    .append(",\\"name\\":").append(Json.quote(
+            body.append("{\"uri\":").append(Json.quote(uri))
+                    .append(",\"name\":").append(Json.quote(
                             part.filename == null ? uriFile.getName() : part.filename))
-                    .append(",\\"source\\":{\\"type\\":\\"uri\\",\\"uri\\":")
+                    .append(",\"source\":{\"type\":\"uri\",\"uri\":")
                     .append(Json.quote(uri)).append("}}");
         }
         return body.append("]}").toString();
