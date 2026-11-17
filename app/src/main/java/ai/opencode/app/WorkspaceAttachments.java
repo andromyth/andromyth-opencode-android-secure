@@ -20,7 +20,7 @@ public final class WorkspaceAttachments {
 
     public static String safeName(String name) {
         String value = name == null ? "" : name.trim();
-        int slash = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\\\'));
+        int slash = Math.max(value.lastIndexOf('/'), value.lastIndexOf((char) 92));
         if (slash >= 0) value = value.substring(slash + 1);
         value = value.replaceAll("[^A-Za-z0-9._-]", "_");
         while (value.startsWith(".")) value = value.substring(1);
