@@ -3251,12 +3251,12 @@ public final class RunHub implements ServerService.EventListener {
 
                 long total = 0;
                 StringBuilder prompt = new StringBuilder();
-                prompt.append(cap).append("\\n\\n")
+                prompt.append(cap).append((char) 10).append((char) 10)
                       .append("The attached files have been saved inside this project's ")
                       .append("workspace. Read the exact paths below with your file tools. ")
                       .append("For large files, inspect them in bounded chunks instead of ")
                       .append("loading the entire file into one request. Do not search for ")
-                      .append("these files outside the listed paths.\\n");
+                      .append("these files outside the listed paths.").append((char) 10);
 
                 for (FilePart p : files) {
                     if (p == null || p.file == null || !p.file.isFile())
