@@ -84,7 +84,7 @@ public final class NetworkDiagnosticsActivity extends Activity {
         root.addView(action("Copy LAN agent prompt", v -> copyLanAgentPrompt()));
         root.addView(action("Capture URLs/domains (all apps, DNS)", v ->
                 startActivity(new Intent(this, CaptureActivity.class))));
-        root.addView(action("ARP security monitor + lab", v -> startActivity(new Intent(this, ArpSecurityLabActivity.class))));
+        root.addView(action("LAN security monitor + ARP simulation lab", v -> startActivity(new Intent(this, ArpSecurityLabActivity.class))));
         root.addView(action("Capture packets (VPN tunnel)", v -> startPacketCapture()));
 
         output = new TextView(this);

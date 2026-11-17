@@ -3,9 +3,13 @@ package ai.opencode.app;
 import android.app.Activity;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.RouteInfo;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -14,28 +18,27 @@ import android.widget.TextView;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
-import java.util.Map;
-import java.util.LinkedHashMap;
-import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Live passive ARP neighbour-cache monitor with offline detector simulations.
- * Reads the kernel ARP cache only; never sends packets or changes network state.
+ * Android-supported passive LAN configuration monitor with offline ARP simulations.
+ * It observes network metadata only; it does not inspect ARP frames or prove spoofing.
  */
 public final class ArpSecurityLabActivity extends Activity {
     private LinearLayout history;
     private TextView status;
     private int runCount;
-    private final Handler handler = new Handler(Looper.getMainLooper());
+    private ConnectivityManager connectivity;
+    private ConnectivityManager.NetworkCallback networkCallback;
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private boolean monitoring;
-    private ArpSpoofLab.Detector liveDetector;
-    private final Runnable livePoll = new Runnable() { @Override public void run() { pollLive(); if (monitoring) handler.postDelayed(this, 3000L); } };
+    private boolean destroyed;
+    private String liveBaseline;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        connectivity = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(Theme.cr(this, R.color.bg));
         LinearLayout root = new LinearLayout(this);
@@ -47,35 +50,26 @@ public final class ArpSecurityLabActivity extends Activity {
         Theme.window(this);
 
         TextView title = new TextView(this);
-        title.setText("ARP security monitor");
+        title.setText("LAN security monitor");
         title.setTextSize(23);
         title.setTextColor(Theme.TXT);
         root.addView(title);
 
         TextView boundary = new TextView(this);
-        boundary.setText("LIVE MODE: read-only sampling of Android /proc/net/arp. No packets are sent and no network settings are changed. Android or OEM policy may deny access; if blocked, the app reports live monitoring unavailable. Mapping changes are warnings for investigation, not proof of spoofing. Offline simulations remain available below.");
+        boundary.setText("LIVE MODE: Android-supported, read-only network observation. Tracks active network, interface, IP addresses, default gateway and DNS configuration. It does not read /proc/net/arp or capture Ethernet ARP frames, so it cannot confirm ARP spoofing. Configuration changes are investigation warnings, not proof of attack. Offline ARP detector simulations remain available below.");
         boundary.setTextSize(12);
         boundary.setTextColor(Theme.TXT_DIM);
         boundary.setPadding(0, Theme.dp(this, 8), 0, Theme.dp(this, 10));
         root.addView(boundary);
 
         status = new TextView(this);
-        status.setText("No scenarios run yet.");
+        status.setText("No live network snapshot or scenarios yet.");
         status.setTextSize(13);
         status.setTextColor(Theme.TXT);
         root.addView(status);
 
-        root.addView(action("Start live passive monitoring", v -> {
-            monitoring = true;
-            liveDetector = null;
-            handler.removeCallbacks(livePoll);
-            livePoll.run();
-        }));
-        root.addView(action("Stop live monitoring", v -> {
-            monitoring = false;
-            handler.removeCallbacks(livePoll);
-            status.setText("Live monitoring stopped.");
-        }));
+        root.addView(action("Start live passive monitoring", v -> startLiveMonitoring()));
+        root.addView(action("Stop live monitoring", v -> stopLiveMonitoring()));
         root.addView(action("Take one live snapshot", v -> pollLive()));
         root.addView(action("Run normal network scenario", v ->
                 run(ArpSpoofLab.Scenario.NORMAL)));
@@ -91,11 +85,11 @@ public final class ArpSecurityLabActivity extends Activity {
         root.addView(action("Clear alert history", v -> {
             history.removeAllViews();
             runCount = 0;
-            status.setText("History cleared. No scenarios run yet.");
+            status.setText("History cleared. Live monitoring state is unchanged.");
         }));
 
         TextView historyTitle = new TextView(this);
-        historyTitle.setText("Live alerts and simulation history");
+        historyTitle.setText("Live network alerts and simulation history");
         historyTitle.setTextSize(18);
         historyTitle.setTextColor(Theme.TXT);
         historyTitle.setPadding(0, Theme.dp(this, 20), 0, Theme.dp(this, 4));
@@ -106,76 +100,146 @@ public final class ArpSecurityLabActivity extends Activity {
         root.addView(history);
     }
 
+    private void startLiveMonitoring() {
+        if (connectivity == null) {
+            showLiveUnavailable("Connectivity service unavailable");
+            return;
+        }
+        if (monitoring) {
+            pollLive();
+            return;
+        }
+        monitoring = true;
+        liveBaseline = null;
+        try {
+            networkCallback = new ConnectivityManager.NetworkCallback() {
+                @Override public void onAvailable(Network network) { pollLive(); }
+                @Override public void onLost(Network network) { pollLive(); }
+                @Override public void onLinkPropertiesChanged(Network network, LinkProperties properties) {
+                    pollLive();
+                }
+                @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
+                    pollLive();
+                }
+            };
+            connectivity.registerDefaultNetworkCallback(networkCallback);
+            status.setText("Monitoring active network changes…");
+            pollLive();
+        } catch (RuntimeException e) {
+            monitoring = false;
+            unregisterNetworkCallback();
+            showLiveUnavailable(e.toString());
+        }
+    }
+
+    private void stopLiveMonitoring() {
+        monitoring = false;
+        unregisterNetworkCallback();
+        status.setText("Live network monitoring stopped.");
+    }
+
+    private void unregisterNetworkCallback() {
+        if (networkCallback != null && connectivity != null) {
+            try { connectivity.unregisterNetworkCallback(networkCallback); }
+            catch (IllegalArgumentException ignored) {}
+            networkCallback = null;
+        }
+    }
 
     private void pollLive() {
-        status.setText("Checking Android neighbour-table access…");
+        if (destroyed) return;
+        if (connectivity == null) {
+            showLiveUnavailable("Connectivity service unavailable");
+            return;
+        }
         io.execute(() -> {
             try {
-                Map<String,String> snapshot = ArpNeighbourMonitor.readSnapshot();
-                handler.post(() -> applyLiveSnapshot(snapshot));
-            } catch (IOException | SecurityException e) {
-                handler.post(() -> showLiveUnavailable(e));
+                Network network = connectivity.getActiveNetwork();
+                if (network == null) {
+                    runOnUiThread(() -> applyLiveSnapshot("No active network", "No active network is currently reported by Android."));
+                    return;
+                }
+                LinkProperties properties = connectivity.getLinkProperties(network);
+                NetworkCapabilities capabilities = connectivity.getNetworkCapabilities(network);
+                StringBuilder detail = new StringBuilder();
+                detail.append("Network: ").append(network).append('\n');
+                if (capabilities != null) {
+                    detail.append("Transport: ");
+                    boolean found = false;
+                    if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                        detail.append("Wi-Fi"); found = true;
+                    }
+                    if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
+                        if (found) detail.append(", ");
+                        detail.append("cellular"); found = true;
+                    }
+                    if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
+                        if (found) detail.append(", ");
+                        detail.append("Ethernet"); found = true;
+                    }
+                    if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                        if (found) detail.append(", ");
+                        detail.append("VPN"); found = true;
+                    }
+                    if (!found) detail.append("other / not reported");
+                    detail.append('\n');
+                } else {
+                    detail.append("Transport: unavailable\n");
+                }
+                if (properties == null) {
+                    detail.append("Link properties: unavailable\n");
+                } else {
+                    detail.append("Interface: ").append(properties.getInterfaceName()).append('\n');
+                    for (LinkAddress address : properties.getLinkAddresses())
+                        detail.append("Address: ").append(address).append('\n');
+                    for (RouteInfo route : properties.getRoutes()) {
+                        if (route.isDefaultRoute() && route.getGateway() != null
+                                && !route.getGateway().isAnyLocalAddress())
+                            detail.append("Default gateway: ")
+                                    .append(route.getGateway().getHostAddress()).append('\n');
+                    }
+                    for (java.net.InetAddress dns : properties.getDnsServers())
+                        detail.append("DNS: ").append(dns.getHostAddress()).append('\n');
+                }
+                String snapshot = detail.toString().trim();
+                runOnUiThread(() -> applyLiveSnapshot(snapshot, snapshot));
             } catch (RuntimeException e) {
-                handler.post(() -> showLiveUnavailable(e));
+                runOnUiThread(() -> showLiveUnavailable(e.toString()));
             }
         });
     }
 
-    private void applyLiveSnapshot(Map<String,String> snapshot) {
-        if (isFinishing() || isDestroyed()) return;
-        if (snapshot.isEmpty()) {
-            status.setText("ACCESSIBLE · No complete IPv4 ARP entries are currently exposed. This is not proof that the LAN is clean.");
-        } else if (liveDetector == null) {
-            liveDetector = new ArpSpoofLab.Detector(new LinkedHashMap<>(snapshot));
-            addLiveCard("LIVE BASELINE", "Captured " + snapshot.size() + " complete IP-to-MAC bindings.");
-            status.setText("LIVE · Baseline captured: " + snapshot.size() + " entries.");
+    private void applyLiveSnapshot(String fingerprint, String detail) {
+        if (destroyed || isFinishing()) return;
+        if (liveBaseline == null) {
+            liveBaseline = fingerprint;
+            status.setText("LIVE · Baseline captured. Android network metadata is accessible.");
+            addLiveCard("LIVE NETWORK BASELINE", detail);
+        } else if (!liveBaseline.equals(fingerprint)) {
+            liveBaseline = fingerprint;
+            status.setText("NETWORK CONFIGURATION CHANGED · Review the new values. This is not proof of spoofing.");
+            addLiveCard("NETWORK CHANGE — INVESTIGATE", detail);
         } else {
-            StringBuilder changes = new StringBuilder();
-            int count = 0;
-            for (Map.Entry<String,String> entry : snapshot.entrySet()) {
-                for (ArpSpoofLab.Alert alert : liveDetector.observe(
-                        new ArpSpoofLab.Observation(entry.getKey(), entry.getValue()))) {
-                    count++;
-                    changes.append(alert.type).append(" · ").append(alert.ip)
-                            .append(" · expected ").append(alert.expectedMac)
-                            .append(" · observed ").append(alert.observedMac).append('\n');
-                }
-            }
-            status.setText("LIVE · " + snapshot.size() + " entries · "
-                    + (count == 0 ? "no new mapping-change warnings" : count + " new warnings"));
-            if (count > 0) addLiveCard("POSSIBLE ARP ANOMALY — VERIFY", changes.toString().trim());
+            status.setText("LIVE · No network configuration change detected since baseline. This does not establish that the LAN is safe.");
         }
-        if (monitoring) handler.postDelayed(livePoll, 3000L);
     }
 
-    private void showLiveUnavailable(Exception error) {
-        if (isFinishing() || isDestroyed()) return;
+    private void showLiveUnavailable(String reason) {
+        if (destroyed || isFinishing()) return;
         monitoring = false;
-        handler.removeCallbacks(livePoll);
-        status.setText("LIVE MONITOR UNAVAILABLE · Android blocked or failed neighbour-table access: "
-                + error.getClass().getSimpleName() + ". No live ARP visibility is available through this method.");
-        addLiveCard("LIVE ACCESS UNAVAILABLE", error.toString());
-    }
-
-    private void addLiveCard(String label, String detail) {
-        TextView card = new TextView(this);
-        card.setText(new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date())
-                + " · " + label + "\n" + detail
-                + "\nRead-only cache observation; mapping changes are not proof of spoofing.");
-        card.setTextSize(12);
-        card.setTextColor(Theme.TXT);
-        card.setPadding(Theme.dp(this, 12), Theme.dp(this, 12), Theme.dp(this, 12), Theme.dp(this, 12));
-        history.addView(card, 0);
+        unregisterNetworkCallback();
+        status.setText("LIVE NETWORK MONITOR UNAVAILABLE · " + reason);
+        addLiveCard("LIVE NETWORK ACCESS UNAVAILABLE", reason);
     }
 
     @Override protected void onPause() {
-        monitoring = false;
-        handler.removeCallbacks(livePoll);
+        stopLiveMonitoring();
         super.onPause();
     }
 
     @Override protected void onDestroy() {
-        handler.removeCallbacks(livePoll);
+        destroyed = true;
+        unregisterNetworkCallback();
         io.shutdownNow();
         super.onDestroy();
     }
@@ -197,6 +261,17 @@ public final class ArpSecurityLabActivity extends Activity {
         lp.topMargin = Theme.dp(this, 8);
         v.setLayoutParams(lp);
         return v;
+    }
+
+    private void addLiveCard(String label, String detail) {
+        TextView card = new TextView(this);
+        card.setText(new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date())
+                + " · " + label + "\n" + detail
+                + "\nAndroid network metadata only; this is not an ARP packet observation.");
+        card.setTextSize(12);
+        card.setTextColor(Theme.TXT);
+        card.setPadding(Theme.dp(this, 12), Theme.dp(this, 12), Theme.dp(this, 12), Theme.dp(this, 12));
+        history.addView(card, 0);
     }
 
     private void run(ArpSpoofLab.Scenario scenario) {
