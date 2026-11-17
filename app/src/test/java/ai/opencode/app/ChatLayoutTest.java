@@ -3,6 +3,7 @@ package ai.opencode.app;
 import android.view.View;
 import android.widget.TextView;
 import android.widget.ScrollView;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 
 import org.junit.Test;
@@ -122,6 +123,42 @@ public class ChatLayoutTest {
                         (LinearLayout.LayoutParams) actions.getChildAt(i).getLayoutParams();
                 assertEquals("all actions share the available width", 1f, lp.weight, 0f);
             }
+        }
+    }
+
+    /** Question cards bound their content viewport and keep actions outside the scroll area. */
+    @Test
+    public void questionCard_longContentScrollsWhileActionsStayVisible() throws Exception {
+        try (ActivityController<ChatActivity> ctl =
+                     Robolectric.buildActivity(ChatActivity.class)) {
+            ChatActivity a = ctl.setup().get();
+            java.util.List<Questions.Opt> options = new java.util.ArrayList<>();
+            options.add(new Questions.Opt("Forecast the 15:30 close", null));
+            options.add(new Questions.Opt("Show a 5-min path to 15:30", null));
+            java.util.List<Questions.Prompt> prompts = new java.util.ArrayList<>();
+            for (int i = 0; i < 3; i++) {
+                prompts.add(new Questions.Prompt("Question " + i, "Target", false, options));
+            }
+            Questions.Req req = new Questions.Req("question-scroll-test", "session-test", prompts);
+            java.lang.reflect.Method build = ChatActivity.class.getDeclaredMethod(
+                    "buildQuestionCard", Questions.Req.class);
+            build.setAccessible(true);
+            LinearLayout card = (LinearLayout) build.invoke(a, req);
+
+            assertEquals("header, bounded content, fixed actions", 3, card.getChildCount());
+            ScrollView content = (ScrollView) card.getChildAt(1);
+            assertTrue("question content has a bounded viewport",
+                    content.getLayoutParams().height > 0);
+            assertTrue("vertical scrollbar is enabled", content.isVerticalScrollBarEnabled());
+            LinearLayout contentBody = (LinearLayout) content.getChildAt(0);
+            assertTrue("all question sections remain in the scroll body",
+                    contentBody.getChildCount() > 3);
+            assertEquals("actions remain outside the scroll view",
+                    "Skip", ((TextView) ((LinearLayout) card.getChildAt(2)).getChildAt(0)).getText().toString());
+            HorizontalScrollView optionsScroll =
+                    (HorizontalScrollView) contentBody.getChildAt(2);
+            assertTrue("long option rows can scroll horizontally",
+                    optionsScroll.isHorizontalScrollBarEnabled());
         }
     }
 
