@@ -3287,13 +3287,13 @@ public final class RunHub implements ServerService.EventListener {
                 synchronized (styleTold) { told = styleTold.get(sid); }
                 String wire = TerseMode.wrap(MobileAgenticProtocol.wrap(cap), tp, told);
                 final String recap = contextRepair(sid);
-                if (recap != null) wire = recap + "\\n\\n" + wire;
+                if (recap != null) wire = recap + "\n\n" + wire;
                 final boolean anchorArmed = anchorPending(sid);
                 final String anchor = anchorArmed ? compactionAnchorBlock(sid, cap) : null;
-                if (anchor != null) wire = anchor + "\\n\\n" + wire;
+                if (anchor != null) wire = anchor + "\n\n" + wire;
                 else if (GreetGuard.isBareGreeting(cap)) {
                     String greet = threadContextBlock(sid, cap);
-                    if (greet != null) wire = greet + "\\n\\n" + wire;
+                    if (greet != null) wire = greet + "\n\n" + wire;
                 }
 
                 // Match Desktop: submit file:// URIs through the V2 prompt
