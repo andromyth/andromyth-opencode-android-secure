@@ -176,6 +176,47 @@ public final class AuthStore {
         writeJson(Binaries.configFile(c), cfg);
     }
 
+    /** Register the account-free local Graphify MCP server without replacing other MCP entries. */
+    public static void setGraphifyMcp(Context c, File launcher) throws IOException {
+        Map<String, Object> cfg = readConfig(c);
+        Map<String, Object> mcp = Json.map(cfg, "mcp");
+        if (mcp == null) {
+            mcp = new LinkedHashMap<>();
+            cfg.put("mcp", mcp);
+        }
+        Object prior = mcp.get("graphify-local");
+        if (prior != null) {
+            Map<String, Object> existing = Json.obj(prior);
+            java.util.List<Object> command = Json.list(existing, "command");
+            if (command == null || command.isEmpty()
+                    || !launcher.getAbsolutePath().equals(command.get(0))) {
+                throw new IOException("MCP name graphify-local is already used by another configuration");
+            }
+        }
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("type", "local");
+        entry.put("command", java.util.Arrays.<Object>asList(launcher.getAbsolutePath()));
+        entry.put("cwd", ".");
+        entry.put("enabled", true);
+        entry.put("timeout", 30000);
+        mcp.put("graphify-local", entry);
+        writeConfig(c, cfg);
+    }
+
+    /** Disable only the Graphify entry owned by this app; preserve all other MCP configuration. */
+    public static boolean disableGraphifyMcp(Context c, File launcher) throws IOException {
+        Map<String, Object> cfg = readConfig(c);
+        Map<String, Object> mcp = Json.map(cfg, "mcp");
+        Map<String, Object> entry = Json.map(mcp, "graphify-local");
+        if (entry == null) return false;
+        java.util.List<Object> command = Json.list(entry, "command");
+        if (command == null || command.isEmpty()
+                || !launcher.getAbsolutePath().equals(command.get(0))) return false;
+        entry.put("enabled", false);
+        writeConfig(c, cfg);
+        return true;
+    }
+
     /**
      * P51: heal opencode.json BEFORE the server reads it — catches
      * values that arrived outside the app's own write path (an agent
