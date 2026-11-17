@@ -31,13 +31,36 @@ public final class GraphifyInstaller {
             return false;
         }
         StringBuilder out = new StringBuilder();
-        int apt = Debian.runGuest(c,
-                "set -e; export DEBIAN_FRONTEND=noninteractive; "
-                + "apt-get update; "
-                + "apt-get install -y --no-install-recommends python3 python3-venv python3-pip",
-                out, 900);
+        int apt = -1;
+        // Debian.install() is synchronized on Debian.class. Use the same
+        // monitor so app-owned apt bootstrap/repair cannot overlap Graphify.
+        synchronized (Debian.class) {
+            for (int attempt = 1; attempt <= 12; attempt++) {
+                out.setLength(0);
+                apt = Debian.runGuest(c,
+                        "set -e; export DEBIAN_FRONTEND=noninteractive; "
+                        + "apt-get update; "
+                        + "apt-get install -y --no-install-recommends python3 python3-venv python3-pip",
+                        out, 900);
+                if (apt == 0) break;
+                String error = out.toString();
+                boolean locked = error.contains("Could not get lock")
+                        || error.contains("Unable to lock")
+                        || error.contains("is held by process");
+                if (!locked || attempt == 12) break;
+                append(report, "APT is busy (attempt " + attempt
+                        + "/12); waiting 5 seconds for the existing package operation to finish.\\n");
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    append(report, "Interrupted while waiting for APT.\\n");
+                    return false;
+                }
+            }
+        }
         if (apt != 0) {
-            append(report, "Python prerequisite installation failed (exit " + apt + "):\n" + tail(out));
+            append(report, "Python prerequisite installation failed (exit " + apt + "):\\n" + tail(out));
             return false;
         }
 
