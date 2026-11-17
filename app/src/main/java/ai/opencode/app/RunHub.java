@@ -3250,13 +3250,12 @@ public final class RunHub implements ServerService.EventListener {
                     throw new IOException("the active project workspace is unavailable");
 
                 long total = 0;
-                StringBuilder prompt = new StringBuilder();
-                prompt.append(cap).append((char) 10).append((char) 10)
-                      .append("The attached files have been saved inside this project's ")
-                      .append("workspace. Read the exact paths below with your file tools. ")
-                      .append("For large files, inspect them in bounded chunks instead of ")
-                      .append("loading the entire file into one request. Do not search for ")
-                      .append("these files outside the listed paths.").append((char) 10);
+                List<String> relativePaths = new ArrayList<>();
+                StringBuilder fallbackPrompt = new StringBuilder();
+                fallbackPrompt.append(cap).append((char) 10).append((char) 10)
+                      .append("The attached files are in this project's workspace. ")
+                      .append("Read the exact paths below with your file tools. ")
+                      .append("For large files, inspect them in bounded chunks.").append((char) 10);
 
                 for (FilePart p : files) {
                     if (p == null || p.file == null || !p.file.isFile())
@@ -3268,19 +3267,54 @@ public final class RunHub implements ServerService.EventListener {
                     if (total > WorkspaceAttachments.MAX_BATCH_BYTES)
                         throw new IOException("attachments exceed the 50 MB total limit");
                     String relative = WorkspaceAttachments.copyInto(p.file, root);
-                    prompt.append("- ").append(relative)
+                    relativePaths.add(relative);
+                    fallbackPrompt.append("- ").append(relative)
                             .append(" (").append(p.mime == null ? "unknown type" : p.mime)
                             .append(", ").append(size).append(" bytes)\\n");
                 }
 
                 sys("📎 " + files.size() + (files.size() == 1
-                        ? " file saved in project workspace"
-                        : " files saved in project workspace")
-                        + " — sending file references, not media payloads");
-                // The model receives only small path references. Its normal
-                // file tools read the original bytes from the project root,
-                // avoiding provider media-size limits and base64 expansion.
-                sendText(sid, prompt.toString());
+                        ? " file staged in project workspace"
+                        : " files staged in project workspace")
+                        + " — submitting native OpenCode file references");
+                lastUserText = cap;
+                runHadOutput = false;
+                touchRun(sid);
+                // Keep the same mobile protocol, context repair, compaction
+                // anchor and style metadata that every normal text send carries.
+                final boolean tp = tersePref();
+                final Boolean told;
+                synchronized (styleTold) { told = styleTold.get(sid); }
+                String wire = TerseMode.wrap(MobileAgenticProtocol.wrap(cap), tp, told);
+                final String recap = contextRepair(sid);
+                if (recap != null) wire = recap + "\n\n" + wire;
+                final boolean anchorArmed = anchorPending(sid);
+                final String anchor = anchorArmed ? compactionAnchorBlock(sid, cap) : null;
+                if (anchor != null) wire = anchor + "\n\n" + wire;
+                else if (GreetGuard.isBareGreeting(cap)) {
+                    String greet = threadContextBlock(sid, cap);
+                    if (greet != null) wire = greet + "\n\n" + wire;
+                }
+
+                // Match Desktop: submit file:// URIs through the V2 prompt
+                // contract. The server resolves each URI, infers MIME and
+                // materializes the attachment for the agent.
+                Api.Resp attached = Api.post("/session/" + sid + "/prompt",
+                        buildPathAttachmentBody(wire, files, relativePaths), 300_000);
+                if (attached.status == 404 || attached.status == 405) {
+                    // Older bundled servers do not expose the V2 prompt route.
+                    sendText(sid, fallbackPrompt.toString());
+                    return;
+                }
+                if (!attached.ok()) {
+                    throw new IOException("OpenCode file prompt failed (HTTP "
+                            + attached.status + "): " + attached.body);
+                }
+                styleMark(sid, tp);
+                if (anchorArmed) anchorConsume(sid);
+                reconcile(attached.body);
+                H.removeCallbacks(watchdog);
+                H.postDelayed(watchdog, 2000);
             } catch (Exception e) {
                 sys("file attachment recovery failed: " + e.getMessage());
                 releaseRun(sid, false);
@@ -3290,6 +3324,28 @@ public final class RunHub implements ServerService.EventListener {
                 releaseRun(sid, false);
             }
         });
+    }
+
+    /** Build the OpenCode V2 prompt payload used by Desktop for path-backed files. */
+    static String buildPathAttachmentBody(String caption, List<FilePart> files,
+            List<String> relativePaths) throws IOException {
+        if (files == null || relativePaths == null || files.size() != relativePaths.size())
+            throw new IOException("attachment metadata is incomplete");
+        StringBuilder body = new StringBuilder();
+        body.append("{\"text\":").append(Json.quote(caption))
+                .append(",\"files\":[");
+        for (int i = 0; i < files.size(); i++) {
+            if (i > 0) body.append(',');
+            FilePart part = files.get(i);
+            File uriFile = new File(ServerService.servingDir(), relativePaths.get(i));
+            String uri = uriFile.toURI().toString();
+            body.append("{\"uri\":").append(Json.quote(uri))
+                    .append(",\"name\":").append(Json.quote(
+                            part.filename == null ? uriFile.getName() : part.filename))
+                    .append(",\"source\":{\"type\":\"uri\",\"uri\":")
+                    .append(Json.quote(uri)).append("}}");
+        }
+        return body.append("]}").toString();
     }
 
     /** Build the normal model/agent fallback ladder with arbitrary file parts. */
