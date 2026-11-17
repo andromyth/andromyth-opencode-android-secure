@@ -147,6 +147,7 @@ public final class ArpSecurityLabActivity extends Activity {
     }
 
     private void pollLive() {
+        if (destroyed) return;
         if (connectivity == null) {
             showLiveUnavailable("Connectivity service unavailable");
             return;
