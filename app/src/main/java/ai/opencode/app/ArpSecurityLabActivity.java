@@ -202,7 +202,7 @@ public final class ArpSecurityLabActivity extends Activity {
                 }
                 String snapshot = detail.toString().trim();
                 runOnUiThread(() -> applyLiveSnapshot(snapshot, snapshot));
-            } catch (SecurityException | RuntimeException e) {
+            } catch (RuntimeException e) {
                 runOnUiThread(() -> showLiveUnavailable(e.toString()));
             }
         });
