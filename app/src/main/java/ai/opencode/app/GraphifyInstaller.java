@@ -48,6 +48,8 @@ public final class GraphifyInstaller {
                 + "'graphifyy[mcp]==" + VERSION + "'; "
                 + PYTHON + " -c \"import graphify, mcp, networkx; print('GRAPHIFY_IMPORT_OK')\"; "
                 + PYTHON + " -m graphify.serve --help >/dev/null; "
+                + "ln -sf " + VENV + "/bin/graphify /usr/local/bin/graphify; "
+                + "ln -sf " + VENV + "/bin/graphify-mcp /usr/local/bin/graphify-mcp; "
                 + "echo GRAPHIFY_MCP_CLI_OK";
         int pip = Debian.runGuest(c, install, out, 2400);
         if (pip != 0 || !out.toString().contains("GRAPHIFY_IMPORT_OK")
