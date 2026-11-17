@@ -932,8 +932,18 @@ public class ServerService extends Service {
      *  unblocked (message.updated / session.idle / session.error flush
      *  every held part — the turn's end must never wait on a timer). */
     private void ingestChunk(String raw, long now) {
-        Map<String, Object> ev = Json.obj(Json.parse(raw));
-        if (ev == null) return;
+        Map<String, Object> ev;
+        try {
+            ev = Json.obj(Json.parse(raw));
+        } catch (Throwable e) {
+            appendDiag("sse_frame_parse_error", e.getClass().getSimpleName()
+                    + ": " + String.valueOf(e.getMessage()));
+            return; // A malformed frame must not tear down the whole event feed.
+        }
+        if (ev == null) {
+            appendDiag("sse_frame_empty", "JSON frame did not contain an event object");
+            return;
+        }
         ingest(ev);
         gov.noteType(Json.str(ev, "type"));
         for (String c : gov.drain(now, false)) {
@@ -970,12 +980,15 @@ public class ServerService extends Service {
                 try {
                     c = Api.open("GET", "/event", null, 0);
                     c.setRequestProperty("Accept", "text/event-stream");
-                    if (c.getResponseCode() != 200) {
+                    int responseCode = c.getResponseCode();
+                    if (responseCode != 200) {
+                        appendDiag("sse_http_error", "GET /event returned HTTP " + responseCode);
                         c.disconnect();
                         Thread.sleep(3000);
                         continue;
                     }
                     sseConn = c;
+                    appendDiag("sse_connected", "GET /event returned HTTP 200");
                     // P4: ask the server for anything pending RIGHT NOW —
                     // recovers asks that fired before connect / during a
                     // reconnect gap, and un-stalls agents that asked while
@@ -1001,6 +1014,8 @@ public class ServerService extends Service {
                     // P23: reconnect below — the SSE loop must survive
                     // anything (Errors included); a dead feed was one of
                     // the ways a run went silent on the field device.
+                    appendDiag("sse_connection_error", e.getClass().getSimpleName()
+                            + ": " + String.valueOf(e.getMessage()));
                 } finally {
                     sseConn = null;
                     if (c != null) try { c.disconnect(); } catch (Exception ignored) {}
@@ -1008,6 +1023,8 @@ public class ServerService extends Service {
                     // every held frame before the reconnect sleep so the
                     // governor can never swallow a part's final state.
                     try { flushGovernor(); } catch (Throwable ignored) {}
+                    if (RUNNING && gen == sseGen)
+                        appendDiag("sse_disconnected", "Event stream ended; reconnect scheduled");
                 }
                 if (RUNNING && gen == sseGen) {
                     try { Thread.sleep(2500); } catch (InterruptedException e) { return; }
