@@ -3277,18 +3277,44 @@ public final class RunHub implements ServerService.EventListener {
                         ? " file staged in project workspace"
                         : " files staged in project workspace")
                         + " — submitting native OpenCode file references");
+                lastUserText = cap;
+                runHadOutput = false;
+                touchRun(sid);
+                // Keep the same mobile protocol, context repair, compaction
+                // anchor and style metadata that every normal text send carries.
+                final boolean tp = tersePref();
+                final Boolean told;
+                synchronized (styleTold) { told = styleTold.get(sid); }
+                String wire = TerseMode.wrap(MobileAgenticProtocol.wrap(cap), tp, told);
+                final String recap = contextRepair(sid);
+                if (recap != null) wire = recap + "\\n\\n" + wire;
+                final boolean anchorArmed = anchorPending(sid);
+                final String anchor = anchorArmed ? compactionAnchorBlock(sid, cap) : null;
+                if (anchor != null) wire = anchor + "\\n\\n" + wire;
+                else if (GreetGuard.isBareGreeting(cap)) {
+                    String greet = threadContextBlock(sid, cap);
+                    if (greet != null) wire = greet + "\\n\\n" + wire;
+                }
+
                 // Match Desktop: submit file:// URIs through the V2 prompt
                 // contract. The server resolves each URI, infers MIME and
-                // materializes the file as a normal attachment for the agent.
+                // materializes the attachment for the agent.
                 Api.Resp attached = Api.post("/session/" + sid + "/prompt",
-                        buildPathAttachmentBody(cap, files, relativePaths), 300_000);
+                        buildPathAttachmentBody(wire, files, relativePaths), 300_000);
                 if (attached.status == 404 || attached.status == 405) {
                     // Older bundled servers do not expose the V2 prompt route.
                     sendText(sid, fallbackPrompt.toString());
-                } else if (!attached.ok()) {
+                    return;
+                }
+                if (!attached.ok()) {
                     throw new IOException("OpenCode file prompt failed (HTTP "
                             + attached.status + "): " + attached.body);
                 }
+                styleMark(sid, tp);
+                if (anchorArmed) anchorConsume(sid);
+                reconcile(attached.body);
+                H.removeCallbacks(watchdog);
+                H.postDelayed(watchdog, 2000);
             } catch (Exception e) {
                 sys("file attachment recovery failed: " + e.getMessage());
                 releaseRun(sid, false);
