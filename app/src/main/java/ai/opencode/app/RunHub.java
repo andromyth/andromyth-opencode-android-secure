@@ -3245,46 +3245,48 @@ public final class RunHub implements ServerService.EventListener {
             }
             try {
                 validateSelectedModel();
-                List<String> urls = new ArrayList<>();
-                List<String> mimes = new ArrayList<>();
-                List<String> names = new ArrayList<>();
+                File root = ServerService.servingDir();
+                if (root == null || !root.isDirectory())
+                    throw new IOException("the active project workspace is unavailable");
+
+                long total = 0;
+                StringBuilder prompt = new StringBuilder();
+                prompt.append(cap).append((char) 10).append((char) 10)
+                      .append("The attached files have been saved inside this project's ")
+                      .append("workspace. Read the exact paths below with your file tools. ")
+                      .append("For large files, inspect them in bounded chunks instead of ")
+                      .append("loading the entire file into one request. Do not search for ")
+                      .append("these files outside the listed paths.").append((char) 10);
+
                 for (FilePart p : files) {
+                    if (p == null || p.file == null || !p.file.isFile())
+                        throw new IOException("an attachment is no longer available");
                     long size = p.file.length();
-                    if (size > 20L * 1024L * 1024L)
+                    if (size > WorkspaceAttachments.MAX_FILE_BYTES)
                         throw new IOException(p.filename + " exceeds 20 MB");
-                    byte[] bytes = java.nio.file.Files.readAllBytes(p.file.toPath());
-                    urls.add("data:" + p.mime + ";base64,"
-                            + android.util.Base64.encodeToString(bytes,
-                                    android.util.Base64.NO_WRAP));
-                    mimes.add(p.mime);
-                    names.add(p.filename);
+                    total += size;
+                    if (total > WorkspaceAttachments.MAX_BATCH_BYTES)
+                        throw new IOException("attachments exceed the 50 MB total limit");
+                    String relative = WorkspaceAttachments.copyInto(p.file, root);
+                    prompt.append("- ").append(relative)
+                            .append(" (").append(p.mime == null ? "unknown type" : p.mime)
+                            .append(", ").append(size).append(" bytes)\\n");
                 }
-                lastUserText = cap;
-                runHadOutput = false;
-                touchRun(sid);
-                List<String> bodies = buildMultiFileBodies(MobileAgenticProtocol.wrap(cap), urls, mimes, names,
-                        Models.selected(appCtx), agent);
-                Api.Resp r = null;
-                for (String body : bodies) {
-                    r = Api.post("/session/" + sid + "/message", body, 300_000);
-                    if (r.ok()) break;
-                }
-                if (r == null || !r.ok()) {
-                    sys("file upload failed" + (r == null ? "" : " · HTTP " + r.status));
-                    releaseRun(sid, false);
-                    return;
-                }
+
                 sys("📎 " + files.size() + (files.size() == 1
-                        ? " file attached" : " files attached"));
-                reconcile(r.body);
-                H.removeCallbacks(watchdog);
-                H.postDelayed(watchdog, 2000);
+                        ? " file saved in project workspace"
+                        : " files saved in project workspace")
+                        + " — sending file references, not media payloads");
+                // The model receives only small path references. Its normal
+                // file tools read the original bytes from the project root,
+                // avoiding provider media-size limits and base64 expansion.
+                sendText(sid, prompt.toString());
             } catch (Exception e) {
-                sys("file upload failed: " + e.getMessage());
+                sys("file attachment recovery failed: " + e.getMessage());
                 releaseRun(sid, false);
             } catch (Throwable e) {
-                Trail.record(appCtx, "hub file upload", e);
-                sys("file upload hit an internal error — contained");
+                Trail.record(appCtx, "hub workspace attachment", e);
+                sys("file attachment recovery hit an internal error — contained");
                 releaseRun(sid, false);
             }
         });
