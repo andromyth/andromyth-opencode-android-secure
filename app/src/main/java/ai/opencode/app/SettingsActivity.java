@@ -3,6 +3,7 @@ package ai.opencode.app;
 import android.animation.ObjectAnimator;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
@@ -217,6 +218,12 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
         root.addView(Theme.sectionLabel(this, "environment"));
         LinearLayout env = section();
         env.addView(debianRow());
+        env.addView(divider());
+        env.addView(rowLink("Local Graphify MCP",
+                GraphifyInstaller.installed(this)
+                        ? "installed · local codebase graph · no account or hosted service"
+                        : "optional · install into Debian · no account or hosted service",
+                "◉", v -> graphifyDialog()));
         env.addView(divider());
         // P15: the agent's own "environment detection" ask — one tap shows
         // kernel/user/os/tools/storage + whether the dirs proot needs exist.
@@ -663,6 +670,45 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
                         + " used · tap to manage");
             });
         }, "oc-storage-size").start();
+    }
+
+    private void graphifyDialog() {
+        boolean installed = GraphifyInstaller.installed(this);
+        new AlertDialog.Builder(this)
+                .setTitle("Local Graphify MCP")
+                .setMessage("Installs Graphify " + GraphifyInstaller.VERSION
+                        + " and its official OpenCode skill inside Debian 12. "
+                        + "The MCP server runs locally over STDIO and builds a separate "
+                        + "graphify-out folder in each project. No Graphify account, "
+                        + "OAuth, API key, or hosted endpoint is used. "
+                        + "Python dependencies require a one-time download.")
+                .setPositiveButton(installed ? "Repair / enable" : "Install", (d, w) -> {
+                    Toast.makeText(this, "Installing local Graphify…", Toast.LENGTH_LONG).show();
+                    new Thread(() -> {
+                        StringBuilder report = new StringBuilder();
+                        boolean ok = GraphifyInstaller.install(this, report);
+                        ui.post(() -> {
+                            if (isFinishing() || isDestroyed()) return;
+                            new AlertDialog.Builder(this)
+                                    .setTitle(ok ? "Graphify ready" : "Graphify installation failed")
+                                    .setMessage(report.toString())
+                                    .setPositiveButton("OK", null)
+                                    .show();
+                            if (ok) ServerService.restart(this);
+                        });
+                    }, "oc-graphify-install").start();
+                })
+                .setNegativeButton(installed ? "Disable MCP" : "Cancel", (d, w) -> {
+                    if (installed) {
+                        boolean changed = GraphifyInstaller.disable(this);
+                        Toast.makeText(this, changed ? "Graphify MCP disabled" :
+                                "Graphify MCP configuration was not changed",
+                                Toast.LENGTH_SHORT).show();
+                        if (changed) ServerService.restart(this);
+                    }
+                })
+                .setNeutralButton("Cancel", null)
+                .show();
     }
 
     private void installToolkit() {
