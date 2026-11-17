@@ -3838,12 +3838,15 @@ public class ChatActivity extends Activity
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         c.addView(head);
 
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+
         for (int qi = 0; qi < n; qi++) {
             final int qiF = qi;                 // lambda capture
             final Questions.Prompt p = req.prompts.get(qi);
             if (qi > 0) {
                 View gap = new View(this);
-                c.addView(gap, new LinearLayout.LayoutParams(
+                content.addView(gap, new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, dp(10)));
             }
             if (p.header != null && !p.header.isEmpty()) {
@@ -3923,7 +3926,16 @@ public class ChatActivity extends Activity
             LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT);
-            c.addView(row, rlp);
+            HorizontalScrollView optionScroll = new HorizontalScrollView(this);
+            optionScroll.setHorizontalScrollBarEnabled(true);
+            optionScroll.setScrollbarFadingEnabled(false);
+            optionScroll.addView(row, new HorizontalScrollView.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+            LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            c.addView(optionScroll, rlp);
             if (p.multiple) {
                 TextView hint = text(10, R.color.text_secondary, false);
                 hint.setText("multiple choices — toggle all that apply");
@@ -3931,6 +3943,21 @@ public class ChatActivity extends Activity
                 c.addView(hint);
             }
         }
+
+        int viewportHeight = Math.max(dp(180), Math.min(dp(300),
+                (int) (getResources().getDisplayMetrics().heightPixels * 0.38f)));
+        ScrollView questionScroll = new ScrollView(this);
+        questionScroll.setFillViewport(false);
+        questionScroll.setVerticalScrollBarEnabled(true);
+        questionScroll.setScrollbarFadingEnabled(false);
+        questionScroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+        questionScroll.addView(content, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams questionScrollLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, viewportHeight);
+        questionScrollLp.topMargin = dp(8);
+        c.addView(questionScroll, questionScrollLp);
 
         LinearLayout btns = new LinearLayout(this);
         btns.setOrientation(LinearLayout.HORIZONTAL);
