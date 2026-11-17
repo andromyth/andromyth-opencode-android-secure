@@ -125,7 +125,7 @@ public final class ArpSecurityLabActivity extends Activity {
             connectivity.registerDefaultNetworkCallback(networkCallback);
             status.setText("Monitoring active network changes…");
             pollLive();
-        } catch (SecurityException | RuntimeException e) {
+        } catch (RuntimeException e) {
             monitoring = false;
             unregisterNetworkCallback();
             showLiveUnavailable(e.toString());
