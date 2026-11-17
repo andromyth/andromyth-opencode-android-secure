@@ -46,7 +46,7 @@ public final class GraphifyInstaller {
                 + "python3 -m venv " + VENV + "; "
                 + PYTHON + " -m pip install --disable-pip-version-check --no-cache-dir "
                 + "'graphifyy[mcp]==" + VERSION + "'; "
-                + PYTHON + " -c 'import graphify, mcp, networkx; print("GRAPHIFY_IMPORT_OK")'; "
+                + PYTHON + " -c \"import graphify, mcp, networkx; print('GRAPHIFY_IMPORT_OK')\"; "
                 + PYTHON + " -m graphify.serve --help >/dev/null; "
                 + "echo GRAPHIFY_MCP_CLI_OK";
         int pip = Debian.runGuest(c, install, out, 2400);
@@ -129,6 +129,8 @@ public final class GraphifyInstaller {
         StringBuilder s = new StringBuilder();
         s.append("#!/system/bin/sh\nset -eu\n")
          .append("test -d \"$PWD\" || exit 72\n")
+         .append("mkdir -p \"$PWD/graphify-out\"\n")
+         .append("if [ ! -s \"$PWD/graphify-out/graph.json\" ]; then printf '%s\\n' '{\"nodes\":[],\"links\":[]}' > \"$PWD/graphify-out/graph.json\"; fi\n")
          .append("export PROOT_LOADER=").append(sh(bin.getAbsolutePath() + "/loader")).append("\n")
          .append("export PROOT_TMP_DIR=").append(sh(tmp.getAbsolutePath())).append("\n")
          .append("export LD_LIBRARY_PATH=").append(sh(lib.getAbsolutePath())).append("\n")
