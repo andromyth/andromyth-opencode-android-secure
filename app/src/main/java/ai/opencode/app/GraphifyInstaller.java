@@ -12,7 +12,7 @@ import java.nio.charset.StandardCharsets;
 public final class GraphifyInstaller {
     private GraphifyInstaller() {}
 
-    public static final String VERSION = "0.9.7";
+    public static final String VERSION = "0.9.111";
     private static final String VENV = "/opt/graphify-venv";
     private static final String PYTHON = VENV + "/bin/python";
 
