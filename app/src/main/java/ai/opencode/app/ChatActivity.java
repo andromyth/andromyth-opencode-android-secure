@@ -3853,14 +3853,14 @@ public class ChatActivity extends Activity
             if (p.header != null && !p.header.isEmpty()) {
                 TextView h = text(11, R.color.accent_light, true);
                 h.setText(p.header.toUpperCase(Locale.ROOT));
-                c.addView(h, new LinearLayout.LayoutParams(
+                content.addView(h, new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
             }
             TextView q = text(13, R.color.text_primary, false);
             q.setText(p.question);
             q.setPadding(0, dp(2), 0, dp(6));
-            c.addView(q, new LinearLayout.LayoutParams(
+            content.addView(q, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -3871,7 +3871,7 @@ public class ChatActivity extends Activity
                 TextView f = text(12, R.color.text_secondary, false);
                 f.setText("(no options — type your answer in the composer "
                         + "and tap Skip)");
-                c.addView(f, new LinearLayout.LayoutParams(
+                content.addView(f, new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
                 continue;
@@ -3933,12 +3933,12 @@ public class ChatActivity extends Activity
             LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT);
-            c.addView(optionScroll, rlp);
+            content.addView(optionScroll, rlp);
             if (p.multiple) {
                 TextView hint = text(10, R.color.text_secondary, false);
                 hint.setText("multiple choices — toggle all that apply");
                 hint.setPadding(0, dp(3), 0, 0);
-                c.addView(hint);
+                content.addView(hint);
             }
         }
 
