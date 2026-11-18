@@ -3924,9 +3924,6 @@ public class ChatActivity extends Activity
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
             }
-            LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT);
             HorizontalScrollView optionScroll = new HorizontalScrollView(this);
             optionScroll.setHorizontalScrollBarEnabled(true);
             optionScroll.setScrollbarFadingEnabled(false);
