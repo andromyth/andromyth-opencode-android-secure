@@ -14,7 +14,7 @@
       "repository": "anomalyco/opentui",
       "url": "https://github.com/anomalyco/opentui.git",
       "default_branch": "main",
-      "commit": "2738bc4b836e9db8bab1df8a7f1d5a5583ee51f1",
+      "commit": "ff939592dc7bd102a4665bf340c4960b868b306b",
       "role": "Official terminal UI and native renderer; build from source for Android ARM64"
     },
     {
