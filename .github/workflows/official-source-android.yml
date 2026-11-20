@@ -156,9 +156,9 @@ jobs:
           ZIG_LIBC: ${{ runner.temp }}/android-libc.txt
         run: |
           set -euo pipefail
-          chmod +x script/release-bin/zig
-          export OPENCODE_REAL_ZIG="$(command -v zig)"
-          export PATH="$PWD/script/release-bin:$PATH"
+          # The official build.rs pins Zig's CPU through OPENCODE_ZIG_CPU.
+          # Do not put its wrapper on PATH as well: that would append -Dcpu twice.
+          test -n "${OPENCODE_ZIG_CPU:-}"
           cargo +1.90.0 build --locked --release --target aarch64-linux-android
           PTY="$PWD/target/aarch64-linux-android/release/opencode-pty"
           test -s "$PTY"
