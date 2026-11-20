@@ -75,7 +75,8 @@ def main() -> None:
             "P42 model context-window cap and bounds are missing")
     require("contextLimit" in auth and "setContextLimit" in auth,
             "P42 persisted per-model context-window cap is missing")
-    require("contextLimit" in p42test and "merge" in p42test,
+    require("contextPolicy_normalizeBoundsAndQuantizes" in p42test
+            and "contextPolicy_mergeWritesModelsDevShape" in p42test,
             "P42 context-cap regression coverage is missing")
 
     engine = args.opencode
