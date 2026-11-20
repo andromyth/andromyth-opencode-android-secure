@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -15,7 +14,7 @@ WORKFLOW_PATH = ROOT / ".github/workflows/secure-android-build.yml"
 SELF_REPO = "andromyth/andromyth-opencode-android-secure"
 
 GITHUB_REPO_RE = re.compile(
-    r"(?:https?://)?(?:www\.)?github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)"
+    r"(?:https?://)?(?:(?:www\.)?github\.com|raw\.githubusercontent\.com|codeload\.github\.com)/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)"
     r"|git@github\.com:([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)"
 )
 ACTION_RE = re.compile(r"^\s*uses:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)@", re.MULTILINE)
@@ -133,7 +132,12 @@ def main() -> None:
                 continue
 
             refs = repo_references(line)
-            if re.search(r"\bgh\s+release\s+download\b", line):
+            is_git_operation = bool(
+                re.search(r"\bgit\s+(?:clone|fetch|pull|submodule\s+add|remote\s+add)\b", line)
+            )
+            is_release_download = bool(re.search(r"\bgh\s+release\s+download\b", line))
+
+            if is_release_download:
                 repo_option = REPO_OPTION_RE.search(line)
                 if repo_option:
                     value = repo_option.group(1)
@@ -148,9 +152,9 @@ def main() -> None:
                 elif not refs:
                     refs.add(SELF_REPO)
 
-            if not refs and re.search(r"\bgit\s+(?:clone|submodule\s+add|remote\s+add)\b", line):
+            if not refs and is_git_operation:
                 errors.append(
-                    f"{path.relative_to(ROOT)}:{line_number}: source repository must be an explicit approved GitHub URL"
+                    f"{path.relative_to(ROOT)}:{line_number}: Git source operations must name an explicit approved repository"
                 )
                 continue
 
@@ -161,10 +165,7 @@ def main() -> None:
                 continue
 
             for ref in refs:
-                if ref == SELF_REPO and (
-                    re.search(r"\bgh\s+release\s+download\b", line)
-                    or re.search(r"\bgit\s+(?:clone|fetch|pull|remote\s+add)\b", line)
-                ):
+                if ref == SELF_REPO and (is_release_download or is_git_operation):
                     continue
                 if ref not in approved:
                     errors.append(
