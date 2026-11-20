@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "engine": {
+    "repository": "anomalyco/opencode",
+    "commit": "b958fc84d73e34a2fa021c285cd38c6de674adb9",
+    "version": "2.3.0"
+  },
+  "opentui": {
+    "repository": "anomalyco/opentui",
+    "commit": "ff939592dc7bd102a4665bf340c4960b868b306b",
+    "version": "0.9.4",
+    "zig": "0.17.1"
+  },
+  "pty": {
+    "source_repository": "anomalyco/opencode",
+    "source_path": "packages/process-daemon",
+    "package_version": "0.6.0",
+    "rust": "1.90.0",
+    "zig": "0.16.0",
+    "target": "aarch64-linux-android",
+    "api_level": 28,
+    "ghostty_commit": "ab0b9da9e88fcb4b0533a1854e84628f663930af"
+  },
+  "bun": {
+    "repository": "oven-sh/bun",
+    "release": "bun-v1.4.4",
+    "compile_target": "bun-linux-arm64-android"
+  },
+  "fff": {
+    "repository": "dmtrKovalenko/fff",
+    "package": "@ff-labs/fff-bun",
+    "version": "0.10.5",
+    "android_package": "@ff-labs/fff-bin-android-arm64",
+    "integrity": "sha512-idn1m9ycwv0Dzz6ih4H8e/X1WpGF6kglUxqP78oYgoC2sgAdPtLxD6hIAZK13p8isK7H8EMwrMze/4lynEDcKQ=="
+  },
+  "target": "Android ARM64 / Bionic",
+  "app_asset": "app/src/main/assets/oc_pkg.bin",
+  "android_ndk": "27.2.12479018",
+  "android_api": 28,
+  "token_safety": {
+    "automatic_compaction_default": false,
+    "config_key": "compaction.auto",
+    "disabled_behavior": "skip automatic and overflow-triggered compaction; preserve original transcript and surface provider overflow",
+    "manual_compaction_when_disabled": "allowed only when the user explicitly requests it",
+    "app_boot_requirement": "write and verify the user-owned setting before spawning the OpenCode server",
+    "app_regression_tests": [
+      "P45Test",
+      "P42Test"
+    ],
+    "source_semantics_guard": "scripts/verify_token_safety.py"
+  }
+}

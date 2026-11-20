@@ -67,7 +67,7 @@ def main() -> None:
     engine = policy.get("official_engine", {})
     deps = policy.get("official_native_dependencies", [])
     approved = {str(x).lower() for x in policy.get("approved_source_repositories", [])}
-    expected = {"anomalyco/opencode", "anomalyco/opentui", "anomalyco/opencode-pty"}
+    expected = {"anomalyco/opencode", "anomalyco/opentui", "ghostty-org/ghostty", "dmtrkovalenko/fff", "oven-sh/bun", "ziglang/zig"}
 
     if engine.get("repository") != "anomalyco/opencode":
         fail("engine must be anomalyco/opencode")
@@ -79,16 +79,26 @@ def main() -> None:
         fail("forks must remain disabled")
     if engine.get("release_builds_require_pinned_commit") is not True:
         fail("official-source release builds must pin exact commits")
+    if not re.fullmatch(r"[0-9a-f]{40}", str(engine.get("commit", ""))):
+        fail("official OpenCode source commit must be pinned to a full SHA")
     dep_repos = {str(x.get("repository", "")).lower() for x in deps}
-    if dep_repos != {"anomalyco/opentui", "anomalyco/opencode-pty"}:
-        fail("native dependency allowlist must contain only official OpenTUI and OpenCode PTY")
+    if dep_repos != {"anomalyco/opentui", "ghostty-org/ghostty", "dmtrkovalenko/fff"}:
+        fail("native dependency allowlist must contain only the reviewed official OpenTUI, Ghostty and FFF sources")
     if approved != expected:
-        fail("approved_source_repositories must exactly match the three official repositories")
+        fail("approved_source_repositories must exactly match the reviewed official source/build tool repositories")
 
     for dependency in deps:
         repo = dependency["repository"]
         if dependency.get("url") != f"https://github.com/{repo}.git":
             fail(f"non-canonical URL for approved dependency {repo}")
+
+    build_tools = policy.get("official_build_tools", [])
+    if {str(x.get("repository", "")).lower() for x in build_tools} != {"oven-sh/bun", "ziglang/zig"}:
+        fail("official Android build tools must be pinned to Bun and Zig")
+    for tool in build_tools:
+        repo = tool["repository"]
+        if tool.get("url") != f"https://github.com/{repo}.git":
+            fail(f"non-canonical URL for approved build tool {repo}")
 
     legacy = policy.get("legacy_compatibility_payload", {})
     digest = str(legacy.get("sha256", "")).lower()
@@ -110,6 +120,50 @@ def main() -> None:
         fail("compatibility build must fetch only the locked release asset from this repository")
     if digest not in workflow:
         fail("build workflow payload checksum does not match UPSTREAM_POLICY.json")
+
+    try:
+        build_manifest = json.loads((ROOT / "OFFICIAL_ANDROID_BUILD.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"cannot read OFFICIAL_ANDROID_BUILD.json: {exc}")
+
+    engine_pin = build_manifest.get("engine", {})
+    tui_pin = build_manifest.get("opentui", {})
+    pty_pin = build_manifest.get("pty", {})
+    bun_pin = build_manifest.get("bun", {})
+    fff_pin = build_manifest.get("fff", {})
+    if engine_pin.get("repository") != engine.get("repository") or engine_pin.get("commit") != engine.get("commit"):
+        fail("Android build manifest must use the exact official OpenCode repository and commit")
+    tui_dependency = next((x for x in deps if x.get("repository") == "anomalyco/opentui"), {})
+    ghostty_dependency = next((x for x in deps if x.get("repository") == "ghostty-org/ghostty"), {})
+    if tui_pin.get("repository") != "anomalyco/opentui" or tui_pin.get("commit") != tui_dependency.get("commit"):
+        fail("Android renderer must match the pinned OpenTUI dependency")
+    if pty_pin.get("ghostty_commit") != ghostty_dependency.get("commit"):
+        fail("Android PTY build must use the Ghostty revision pinned in official OpenCode")
+    if bun_pin.get("repository") != "oven-sh/bun" or bun_pin.get("release") != "bun-v1.4.4":
+        fail("Android CLI must use the approved, pinned Bun runtime")
+    source_workflow_path = ROOT / ".github/workflows/official-source-android.yml"
+    if not source_workflow_path.is_file():
+        fail("official-source Android build workflow is missing")
+    source_workflow = source_workflow_path.read_text(encoding="utf-8")
+    token_guard_path = ROOT / "scripts/verify_token_safety.py"
+    if not token_guard_path.is_file() or "verify_token_safety.py --opencode" not in source_workflow:
+        fail("official-source CI must run the token/context safety compatibility guard")
+
+    ndk_version = str(build_manifest.get("android_ndk", ""))
+    if ndk_version != "27.2.12479018" or ndk_version not in source_workflow:
+        fail("Android NDK must be pinned to the reviewed 27.2.12479018 toolchain")
+    if fff_pin.get("repository") != "dmtrKovalenko/fff" or fff_pin.get("version") != "0.10.5":
+        fail("Android file-search native package must match the official engine lockfile")
+    for pin in (
+        engine_pin.get("commit", ""),
+        tui_pin.get("commit", ""),
+        pty_pin.get("api_level", 0).__str__(),
+        bun_pin.get("release", ""),
+        build_manifest.get("android_ndk", ""),
+    ):
+        if not pin or str(pin) not in source_workflow:
+            fail(f"official-source Android workflow is missing the pinned input {pin}")
+
     if (ROOT / ".github/workflows/vendor-upstream-source.yml").exists():
         fail("legacy source-vendoring workflow must not be reintroduced")
 
