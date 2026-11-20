@@ -141,21 +141,22 @@ def main() -> None:
         fail("Android PTY build must use the Ghostty revision pinned in official OpenCode")
     if bun_pin.get("repository") != "oven-sh/bun" or bun_pin.get("release") != "bun-v1.4.4":
         fail("Android CLI must use the approved, pinned Bun runtime")
+    source_workflow_path = ROOT / ".github/workflows/official-source-android.yml"
+    if not source_workflow_path.is_file():
+        fail("official-source Android build workflow is missing")
+    source_workflow = source_workflow_path.read_text(encoding="utf-8")
+
     ndk_version = str(build_manifest.get("android_ndk", ""))
     if ndk_version != "27.2.12479018" or ndk_version not in source_workflow:
         fail("Android NDK must be pinned to the reviewed 27.2.12479018 toolchain")
     if fff_pin.get("repository") != "dmtrKovalenko/fff" or fff_pin.get("version") != "0.10.5":
         fail("Android file-search native package must match the official engine lockfile")
-
-    source_workflow_path = ROOT / ".github/workflows/official-source-android.yml"
-    if not source_workflow_path.is_file():
-        fail("official-source Android build workflow is missing")
-    source_workflow = source_workflow_path.read_text(encoding="utf-8")
     for pin in (
         engine_pin.get("commit", ""),
         tui_pin.get("commit", ""),
         pty_pin.get("api_level", 0).__str__(),
         bun_pin.get("release", ""),
+        build_manifest.get("android_ndk", ""),
     ):
         if not pin or str(pin) not in source_workflow:
             fail(f"official-source Android workflow is missing the pinned input {pin}")
