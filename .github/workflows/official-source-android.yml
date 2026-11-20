@@ -69,7 +69,7 @@ jobs:
           SDKMANAGER="$(find "$SDK_ROOT" -name sdkmanager -type f 2>/dev/null | head -n1)"
           test -n "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-          "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+          "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0" "platform-tools" "ndk;27.2.12479018"
 
       - name: Install pinned Bun compiler/runtime
         run: |
@@ -120,12 +120,9 @@ jobs:
       - name: Configure Android NDK and Zig libc
         run: |
           set -euo pipefail
-          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
-          if [ -z "$NDK" ]; then
-            SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
-            NDK="$(find "$SDK_ROOT/ndk" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -n1)"
-          fi
-          test -n "$NDK" && test -d "$NDK"
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          NDK="$SDK_ROOT/ndk/27.2.12479018"
+          test -d "$NDK"
           HOST_TAG="linux-x86_64"
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/$HOST_TAG"
           SYSROOT="$TOOLCHAIN/sysroot"
@@ -255,7 +252,8 @@ jobs:
             "zig_for_pty": "0.16.0",
             "zig_for_opentui": "0.17.1",
             "target": "aarch64-linux-android",
-            "android_api": 28
+            "android_api": 28,
+            "android_ndk": "27.2.12479018"
           }
           EOF
           mkdir -p app/src/main/assets
