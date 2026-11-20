@@ -1,47 +1,61 @@
 # Official upstream and feature-preservation policy
 
-This policy governs every future engine update, dependency change, native runtime, APK build and release in this repository.
+This policy governs every engine update, native runtime, Android build, dependency change and APK release.
 
-## Approved upstreams — exact repositories only
+## Exact approved sources
 
-| Component | Approved repository | Default branch |
+| Component | Official repository | Pinned source |
 |---|---|---|
-| OpenCode engine and CLI | [anomalyco/opencode](https://github.com/anomalyco/opencode) | `dev` |
-| Terminal UI and native renderer | [anomalyco/opentui](https://github.com/anomalyco/opentui) | `main` |
-| Process / PTY runtime | [anomalyco/opencode-pty](https://github.com/anomalyco/opencode-pty) | `master` |
+| OpenCode engine and CLI | [anomalyco/opencode](https://github.com/anomalyco/opencode) | `dev` at `b958fc84d73e34a2fa021c285cd38c6de674adb9` |
+| OpenTUI native renderer | [anomalyco/opentui](https://github.com/anomalyco/opentui) | `v0.9.4`, commit `ff939592dc7bd102a4665bf340c4960b868b306b` |
+| PTY source | `anomalyco/opencode/packages/process-daemon` | Included in the pinned OpenCode commit |
+| Ghostty VT native source | [ghostty-org/ghostty](https://github.com/ghostty-org/ghostty) | `ab0b9da9e88fcb4b0533a1854e84628f663930af` (pinned by OpenCode) |
+| FFF file-search dependency | [dmtrKovalenko/fff](https://github.com/dmtrKovalenko/fff) | `@ff-labs/fff-bun` 0.10.5; Android ARM64 package integrity is pinned by OpenCode's `bun.lock` |
+| Bun compiler/runtime | [oven-sh/bun](https://github.com/oven-sh/bun) | `bun-v1.4.4` |
+| Zig compiler | [ziglang/zig](https://github.com/ziglang/zig) | `0.16.0` for PTY; `0.17.1` for OpenTUI |
 
-No fork, mirror, repackaged fork binary, renamed fork, or third-party substitute is an approved engine source. A repository is not trusted because its name contains “opencode” or because it claims to be a fork of the official project. The machine-readable allowlist is `UPSTREAM_POLICY.json`; CI enforces it through `scripts/verify_upstream_policy.py`.
+A source is approved only when both its owner/repository and pinned version or commit match `UPSTREAM_POLICY.json` and `OFFICIAL_ANDROID_BUILD.json`. An unknown fork, unofficial mirror, repackaged fork APK or unverified engine binary is denied. The current engine keeps its PTY implementation inside the official OpenCode repository; a separate old PTY repository is not used as the engine source.
 
-## Build-from-source requirement
+## Android ARM64 build requirement
 
-The target architecture is Android ARM64 using Android's Bionic userspace and the Android NDK. New engine releases must be built from reviewed commits in the approved repositories. Release builds must record and pin exact commit SHAs for the engine and each native dependency. Do not use a moving branch, an unverified prebuilt binary, or an asset copied from an unapproved repository as the release source.
+The target is Android ARM64 using Bionic and the Android NDK. The source workflow clones only the pinned official repositories and applies the app-owned, deterministic portability layer in `scripts/port_official_android.py`. That layer is limited to Android target selection, NDK API 28 linking, Android temporary-directory handling, and native library resolution. It does not replace or vendor engine implementation from a fork.
 
-The Android runtime must be built as part of this application’s own reproducible build pipeline. Do not replace that requirement with downloading or repackaging another Android app's APK or native payload.
+The workflow builds:
+1. The OpenCode CLI from the pinned official OpenCode TypeScript/Bun source.
+2. The PTY daemon from `anomalyco/opencode/packages/process-daemon` and its pinned Ghostty source.
+3. The OpenTUI native renderer from the engine-matched official OpenTUI source.
+4. The Android APK in this application repository, bundling those freshly built runtime components using the existing app asset extraction contract.
+
+The OpenTUI shared library is extracted to app-private storage and selected through `OPENTUI_LIB_PATH`. The Android app's existing native UI remains intact; the OpenTUI library supports the official CLI's native terminal renderer. FFF's Android ARM64 binary is supplied only through the official engine's exact lockfile-pinned dependency.
 
 ## Temporary legacy compatibility state
 
-The current `standalone-payload-v1/oc_pkg.bin` asset is a frozen compatibility artifact retained solely to keep the existing application buildable while the official Android ARM64 runtime is developed. It is **not** an approved upstream, is not considered an official OpenCode build, and must not receive new engine features or updates. Its SHA-256 is locked in `UPSTREAM_POLICY.json` and checked in CI. Replace it only after the official-source Android runtime has passed the release gates below.
+The `standalone-payload-v1/oc_pkg.bin` artifact remains frozen solely as a rollback/build fallback until the official-source APK completes validation. It is not an approved engine source and cannot receive new engine features. A successful compatibility APK build is not evidence of official-source migration.
 
-A successful compatibility APK build does not mean the official-source migration is complete.
+## Preserve this application's capabilities
 
-## Preserve this application's existing capabilities
+The Android application is not to be replaced wholesale by upstream code. Port upstream improvements selectively and preserve every existing application-side setting, configuration, authentication path, UI customization, security control, permission, integration, offline/Termux behavior and previously added feature.
 
-The Android application is not to be replaced wholesale by upstream code. Port upstream changes selectively and retain all existing application-side settings, configuration, authentication, UI, security controls, permissions, integrations, offline/Termux handling and previously added features.
-
-Every upstream integration must include a before/after feature and settings comparison. Existing settings and behavior must remain compatible by default. If an upstream change conflicts with an existing app feature, adapt the upstream change or keep the app-side implementation; do not delete or silently downgrade an existing capability. Any unavoidable breaking change requires an explicit decision from the repository owner before implementation.
+Every upstream integration must include a before/after feature and settings comparison. Resolve conflicts by adapting upstream changes around the existing app functionality. Do not remove, reset, or silently downgrade a feature or setting. Any unavoidable breaking change requires an explicit repository-owner decision before implementation.
 
 ## Required release gates
 
-1. Verify the source repository owner and URL against the exact allowlist above.
-2. Pin the reviewed upstream commit SHA and all native dependency SHAs.
-3. Build the Android ARM64 engine, renderer and PTY from source in CI.
-4. Run upstream tests relevant to the selected commits and this application's regression tests.
-5. Compare existing settings, UI, authentication, security and integration behavior before and after the change.
-6. Build the APK in this repository, verify its signature and checksums, and retain build logs and provenance.
-7. Test installation, update-in-place behavior and runtime operation on a physical Android ARM64 device before release.
+1. Verify the exact repository owner, canonical URL, pinned commit and dependency provenance.
+2. Build the Android ARM64 CLI, PTY daemon and OpenTUI renderer from the pinned official source checkouts.
+3. Verify ELF architecture, Android linker/API compatibility, native library dependencies and source checksums.
+4. Run the official-source policy guard, native build checks, this app's JVM regression tests and APK assembly/signature checks.
+5. Compare existing application settings, UI, authentication, security and integration behavior before and after the engine update.
+6. Install and test on a physical Android ARM64 device, including `opencode --version`, server health, file search, PTY spawn/output/resize/termination, TUI native loading, app restart and in-place update.
+7. Retain build provenance, hashes, signing certificate and test reports. Do not publish as production until all gates pass.
 
-A failure in any gate blocks publication. Keep the existing production APK as the rollback point until the new official-source build passes all gates.
+A failure in any release gate blocks production publication. Keep the existing production APK as the rollback point until the new official-source build passes validation.
+
+## Main-branch merge protection
+
+The repository should require both `build` (the existing Android regression/build workflow) and `source-build` (this official-source workflow) as status checks. The `source-build` workflow emits the named check for every pull request and skips the expensive build only when no Android runtime source/build integration files changed. Keep force-push and deletion restrictions enabled, do not restore the previous `Restrict updates` rule, and leave bypass actors empty.
+
+The GitHub connection used during this implementation can inspect branch rules but cannot write repository administration settings. The owner must activate the required status checks under **Settings → Rules → Rulesets**.
 
 ## Change control
 
-Changes to `UPSTREAM_POLICY.json`, the enforcement script or the approved-source list require explicit review. Do not weaken the CI guard to accommodate a convenient fork or binary. If the official repositories add a required dependency, verify that it is owned and maintained by the official OpenCode organization before adding it to the allowlist.
+Changes to `UPSTREAM_POLICY.json`, `OFFICIAL_ANDROID_BUILD.json`, the port script, or the approved-source list require explicit review. Never weaken the source guard to accommodate a convenient fork or prebuilt binary.
