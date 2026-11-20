@@ -100,6 +100,16 @@ def main() -> None:
     manifest = json.loads(source(ROOT / "OFFICIAL_ANDROID_BUILD.json"))
     require(manifest.get("engine", {}).get("commit") == "b958fc84d73e34a2fa021c285cd38c6de674adb9",
             "token-safety audit must run against the approved pinned OpenCode commit")
+    token_policy = manifest.get("token_safety", {})
+    require(token_policy.get("automatic_compaction_default") is False,
+            "official Android release manifest must keep automatic compaction OFF by default")
+    require(token_policy.get("config_key") == "compaction.auto",
+            "official Android release manifest must identify the server compaction kill-switch")
+    require(token_policy.get("manual_compaction_when_disabled")
+            == "allowed only when the user explicitly requests it",
+            "manual compaction behavior must remain user-controlled")
+    require(set(token_policy.get("app_regression_tests", [])) >= {"P45Test", "P42Test"},
+            "token and context regression suites must remain release gates")
 
     print(
         "TOKEN SAFETY PASS: app auto-compaction OFF by default; "
