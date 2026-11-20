@@ -67,7 +67,7 @@ def main() -> None:
     engine = policy.get("official_engine", {})
     deps = policy.get("official_native_dependencies", [])
     approved = {str(x).lower() for x in policy.get("approved_source_repositories", [])}
-    expected = {"anomalyco/opencode", "anomalyco/opentui", "anomalyco/opencode-pty"}
+    expected = {"anomalyco/opencode", "anomalyco/opentui", "ghostty-org/ghostty", "dmtrKovalenko/fff", "oven-sh/bun", "ziglang/zig"}
 
     if engine.get("repository") != "anomalyco/opencode":
         fail("engine must be anomalyco/opencode")
@@ -79,9 +79,11 @@ def main() -> None:
         fail("forks must remain disabled")
     if engine.get("release_builds_require_pinned_commit") is not True:
         fail("official-source release builds must pin exact commits")
+    if not re.fullmatch(r"[0-9a-f]{40}", str(engine.get("commit", ""))):
+        fail("official OpenCode source commit must be pinned to a full SHA")
     dep_repos = {str(x.get("repository", "")).lower() for x in deps}
-    if dep_repos != {"anomalyco/opentui", "anomalyco/opencode-pty"}:
-        fail("native dependency allowlist must contain only official OpenTUI and OpenCode PTY")
+    if dep_repos != {"anomalyco/opentui", "ghostty-org/ghostty", "dmtrKovalenko/fff"}:
+        fail("native dependency allowlist must contain only the reviewed official OpenTUI, Ghostty and FFF sources")
     if approved != expected:
         fail("approved_source_repositories must exactly match the three official repositories")
 
@@ -89,6 +91,14 @@ def main() -> None:
         repo = dependency["repository"]
         if dependency.get("url") != f"https://github.com/{repo}.git":
             fail(f"non-canonical URL for approved dependency {repo}")
+
+    build_tools = policy.get("official_build_tools", [])
+    if {str(x.get("repository", "")).lower() for x in build_tools} != {"oven-sh/bun", "ziglang/zig"}:
+        fail("official Android build tools must be pinned to Bun and Zig")
+    for tool in build_tools:
+        repo = tool["repository"]
+        if tool.get("url") != f"https://github.com/{repo}.git":
+            fail(f"non-canonical URL for approved build tool {repo}")
 
     legacy = policy.get("legacy_compatibility_payload", {})
     digest = str(legacy.get("sha256", "")).lower()
