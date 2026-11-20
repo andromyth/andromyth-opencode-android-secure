@@ -28,6 +28,19 @@ The workflow builds:
 
 The OpenTUI shared library is extracted to app-private storage and selected through `OPENTUI_LIB_PATH`. The Android app's existing native UI remains intact; the OpenTUI library supports the official CLI's native terminal renderer. FFF's Android ARM64 binary is supplied only through the official engine's exact lockfile-pinned dependency.
 
+## Token and context exhaustion protection — required compatibility
+
+The previous app's token/context behavior is part of the release contract. Upstream updates must not silently revert it.
+
+- **Automatic compaction is OFF by default.** The app preference `compact_auto` defaults to `false`; before the server process is spawned, `ServerService` writes the corresponding `compaction.auto=false` into the exact `opencode.json` configuration read by OpenCode.
+- **No silent automatic summary when the context fills.** In the pinned official OpenCode source, `ConfigCompactionPlugin` loads `compaction.auto` from the config. `SessionCompaction.compact` skips every non-manual compaction reason when `auto=false`, including overflow-triggered recovery. The original transcript stays in the session; the provider's overflow is surfaced instead of silently summarizing it.
+- **Manual/user choice remains.** Explicit manual compaction remains available, and the existing Settings switch can opt into automatic compaction. Existing preference state and user-owned `opencode.json` values are preserved according to the ownership merge rules.
+- **Keep the memory-retention floor.** The P41 `compaction.preserve_recent_tokens` setting remains in place for sessions where the user explicitly enables compaction or requests a manual compaction.
+- **Keep the per-model context-window cap and meter.** The P42 slider/presets, `limit.context` override, server-first context denominator, token/cost accounting and warning behavior remain part of the app.
+- **Regression enforcement.** `scripts/verify_token_safety.py` checks the Android boot/config path, the pinned official server's config loading and overflow behavior, and the P42/P45 test surfaces. The source-build workflow runs it before native compilation; the app's `P42Test` and `P45Test` run in the JVM regression suite.
+
+**Important behavior:** With automatic compaction OFF, a full context can cause a provider overflow error. That is intentional: the app must not silently replace the conversation's memory. The user can start a fresh chat, request a manual compaction, or explicitly enable the Settings toggle. Disabling automatic compaction does not enlarge the model's context window or guarantee that every provider accepts the full prompt.
+
 ## Temporary legacy compatibility state
 
 The `standalone-payload-v1/oc_pkg.bin` artifact remains frozen solely as a rollback/build fallback until the official-source APK completes validation. It is not an approved engine source and cannot receive new engine features. A successful compatibility APK build is not evidence of official-source migration.
@@ -43,7 +56,7 @@ Every upstream integration must include a before/after feature and settings comp
 1. Verify the exact repository owner, canonical URL, pinned commit and dependency provenance.
 2. Build the Android ARM64 CLI, PTY daemon and OpenTUI renderer from the pinned official source checkouts.
 3. Verify ELF architecture, Android linker/API compatibility, native library dependencies and source checksums.
-4. Run the official-source policy guard, native build checks, this app's JVM regression tests and APK assembly/signature checks.
+4. Run the official-source policy guard, token/context compatibility guard, native build checks, this app's JVM regression tests and APK assembly/signature checks.
 5. Compare existing application settings, UI, authentication, security and integration behavior before and after the engine update.
 6. Install and test on a physical Android ARM64 device, including `opencode --version`, server health, file search, PTY spawn/output/resize/termination, TUI native loading, app restart and in-place update.
 7. Retain build provenance, hashes, signing certificate and test reports. Do not publish as production until all gates pass.
@@ -58,4 +71,4 @@ The GitHub connection used during this implementation can inspect branch rules b
 
 ## Change control
 
-Changes to `UPSTREAM_POLICY.json`, `OFFICIAL_ANDROID_BUILD.json`, the port script, or the approved-source list require explicit review. Never weaken the source guard to accommodate a convenient fork or prebuilt binary.
+Changes to `UPSTREAM_POLICY.json`, `OFFICIAL_ANDROID_BUILD.json`, the port script, the token-safety guard, or the approved-source list require explicit review. Never weaken the source guard to accommodate a convenient fork or prebuilt binary.
