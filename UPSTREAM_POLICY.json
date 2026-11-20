@@ -1,0 +1,51 @@
+{
+  "policy_version": 1,
+  "application_repository": "andromyth/andromyth-opencode-android-secure",
+  "official_engine": {
+    "repository": "anomalyco/opencode",
+    "url": "https://github.com/anomalyco/opencode.git",
+    "default_branch": "dev",
+    "allow_forks": false,
+    "release_builds_require_pinned_commit": true
+  },
+  "official_native_dependencies": [
+    {
+      "repository": "anomalyco/opentui",
+      "url": "https://github.com/anomalyco/opentui.git",
+      "default_branch": "main",
+      "role": "Official terminal UI and native renderer"
+    },
+    {
+      "repository": "anomalyco/opencode-pty",
+      "url": "https://github.com/anomalyco/opencode-pty.git",
+      "default_branch": "master",
+      "role": "Official process and pseudoterminal runtime"
+    }
+  ],
+  "approved_source_repositories": [
+    "anomalyco/opencode",
+    "anomalyco/opentui",
+    "anomalyco/opencode-pty"
+  ],
+  "approved_github_actions": [
+    "actions/checkout",
+    "actions/setup-java",
+    "actions/upload-artifact",
+    "gradle/actions"
+  ],
+  "legacy_compatibility_payload": {
+    "release_tag": "standalone-payload-v1",
+    "asset": "oc_pkg.bin",
+    "sha256": "6384e745af0ee988a6f51e8aa205c0d71b614e0bb100d22c4e535b355d673a7d",
+    "status": "frozen_compatibility_only",
+    "approved_for_engine_updates": false,
+    "approved_for_new_features": false,
+    "note": "This is a frozen compatibility payload retained temporarily so the existing app remains buildable. It is not an approved upstream source and must not be modified, extended, or used as the basis for new engine features. Replace it only with an Android ARM64 runtime built and verified from the official repositories listed above."
+  },
+  "enforcement": {
+    "unknown_or_forked_engine_repositories": "deny",
+    "unlisted_github_actions": "deny",
+    "unapproved_runtime_binary_sources": "deny",
+    "feature_or_settings_removal_without_explicit_approval": "deny"
+  }
+}
