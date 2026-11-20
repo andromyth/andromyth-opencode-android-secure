@@ -7,6 +7,10 @@ on:
     paths:
       - "app/**"
       - ".github/workflows/secure-android-build.yml"
+      - ".github/workflows/**"
+      - "UPSTREAM_POLICY.json"
+      - "docs/UPSTREAM_POLICY.md"
+      - "scripts/verify_upstream_policy.py"
       - "gradle/**"
       - "build.gradle"
       - "settings.gradle"
@@ -28,6 +32,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+
+      - name: Enforce official-only upstream policy
+        run: python3 scripts/verify_upstream_policy.py
 
       - uses: actions/setup-java@v4
         with:
@@ -101,7 +108,7 @@ jobs:
             echo "OPENCODE_SIGNING_KEY_PASSWORD=$KEY_PASS"
           } >> "$GITHUB_ENV"
 
-      - name: Restore and verify bundled native payload
+      - name: Restore and verify frozen legacy compatibility payload
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
