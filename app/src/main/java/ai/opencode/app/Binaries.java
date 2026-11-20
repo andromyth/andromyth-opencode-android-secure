@@ -328,6 +328,10 @@ public final class Binaries {
         java.util.Map<String, String> e = pb.environment();
         e.put("HOME", home);
         e.put("TMPDIR", c.getCacheDir().getAbsolutePath());
+        // Official OpenTUI native core is extracted beside the CLI by the source-built runtime bundle.
+        File opentui = new File(c.getFilesDir(), "lib/libopentui.so");
+        if (opentui.isFile()) e.put("OPENTUI_LIB_PATH", opentui.getAbsolutePath());
+        else e.remove("OPENTUI_LIB_PATH");
         // Android Toybox first: this device's inherited seccomp policy kills
         // BusyBox applets. User-imported binaries and app shims remain available.
         // P42: build the CA bundle FIRST so shim generation can point at it.
