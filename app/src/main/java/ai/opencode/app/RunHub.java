@@ -1619,6 +1619,9 @@ public final class RunHub implements ServerService.EventListener {
      *  honest line lands and the Context repair note keeps riding. */
     private static void curePoison(final String sid) {
         final List<String> victims;
+        // Capture the active root BEFORE stopForRepair(): stopServer() clears
+        // servingDir, but the database is namespaced by this exact project.
+        final File projectRoot = ServerService.servingDir();
         synchronized (LOCK) {
             if (poisonCuring.contains(sid)) return;
             victims = poisonVictims.get(sid);
@@ -1627,18 +1630,39 @@ public final class RunHub implements ServerService.EventListener {
         }
         IO.execute(() -> {
             String fail = null;
+            boolean stopRequested = false;
             try {
+                stopRequested = true;
                 ServerService.stopForRepair(appCtx);
                 if (!awaitCondition("await stop", 15_000,
                         () -> !ServerService.healthy()
                                 && ServerService.getState() != ServerService.ST_STARTING))
                     fail = "the server did not stop";
-                if (fail == null && !runStoreSurgery(victims))
+                if (fail == null && !runStoreSurgery(victims, projectRoot))
                     fail = "the store edit failed";
-                if (fail == null) ServerService.restart(appCtx);
-                if (fail == null && !awaitCondition("await healthy", 60_000,
-                        ServerService::healthy))
-                    fail = "the server did not come back";
+            } catch (Throwable e) {
+                Trail.record(appCtx, "hub poison cure", e);
+                fail = "internal error";
+            } finally {
+                // A failed DB edit must never strand the foreground app with
+                // its server deliberately stopped. Restore the same project
+                // service on every exit path after requesting the repair stop.
+                if (stopRequested) {
+                    try {
+                        ServerService.restart(appCtx);
+                        if (!awaitCondition("await healthy", 60_000,
+                                ServerService::healthy)) {
+                            fail = fail == null ? "the server did not come back"
+                                    : fail + "; server recovery failed";
+                        }
+                    } catch (Throwable e) {
+                        Trail.record(appCtx, "hub poison restart", e);
+                        fail = fail == null ? "server recovery failed"
+                                : fail + "; server recovery failed";
+                    }
+                }
+            }
+            try {
                 if (fail == null && !verifyCured(sid))
                     fail = "the after-repair check";
                 if (fail == null) {
@@ -1652,8 +1676,8 @@ public final class RunHub implements ServerService.EventListener {
                     sys(CompactionPoison.failedNote(fail));
                 }
             } catch (Throwable e) {
-                Trail.record(appCtx, "hub poison cure", e);
-                sys(CompactionPoison.failedNote("internal error"));
+                Trail.record(appCtx, "hub poison verify", e);
+                sys(CompactionPoison.failedNote("verification error"));
             } finally {
                 synchronized (LOCK) { poisonCuring.remove(sid); }
             }
@@ -1677,36 +1701,61 @@ public final class RunHub implements ServerService.EventListener {
 
     /** The store file the server owns: files/home/.local/share/opencode/
      *  opencode.db (the SQLite store since the JSON-layout era ended). */
-    private static java.io.File storeDbFile(Context c) {
+    private static java.io.File storeDbFile(Context c, File projectRoot)
+            throws java.io.IOException {
+        if (projectRoot != null && projectRoot.isDirectory()) {
+            String key = Binaries.projectStorageKey(projectRoot);
+            File state = new File(new File(c.getFilesDir(), "project-state"), key);
+            return new File(new File(new File(state, "data"), "opencode"),
+                    "opencode.db");
+        }
+        // Compatibility fallback for sessions created before project-scoped
+        // storage was introduced. Current project sessions use the path above.
         return new File(new File(Binaries.homeDir(c), ".local/share/opencode"),
                 "opencode.db");
     }
 
-    /** Execute the planned deletes against the store. The server is
-     *  stopped; ids are bound, never spliced into SQL. */
-    private static boolean runStoreSurgery(List<String> ids) {
+    /** Execute the planned deletes against the active project's store. The
+     *  server is stopped; ids are bound, never spliced into SQL. All deletes
+     *  commit together so an interrupted repair cannot leave half a session. */
+    private static boolean runStoreSurgery(List<String> ids, File projectRoot) {
         if (ids == null || ids.isEmpty()) return true;
         android.database.sqlite.SQLiteDatabase db = null;
         try {
-            java.io.File f = storeDbFile(appCtx);
-            if (!f.exists()) return false;
+            java.io.File f = storeDbFile(appCtx, projectRoot);
+            if (!f.isFile()) {
+                ServerService.appendDiagStatic(appCtx, "context-repair-db-missing",
+                        f.getAbsolutePath());
+                return false;
+            }
             db = android.database.sqlite.SQLiteDatabase.openDatabase(
                     f.getPath(), null,
                     android.database.sqlite.SQLiteDatabase.OPEN_READWRITE);
-            int step = CompactionPoison.SQL_BATCH;
-            for (int from = 0; from < ids.size(); from += step) {
-                int to = Math.min(ids.size(), from + step);
-                db.execSQL(CompactionPoison.sqlFor("part", "message_id", to - from),
-                        ids.subList(from, to).toArray());
+            db.execSQL("PRAGMA busy_timeout=5000");
+            db.beginTransaction();
+            try {
+                int step = CompactionPoison.SQL_BATCH;
+                for (int from = 0; from < ids.size(); from += step) {
+                    int to = Math.min(ids.size(), from + step);
+                    db.execSQL(CompactionPoison.sqlFor("part", "message_id", to - from),
+                            ids.subList(from, to).toArray());
+                }
+                for (int from = 0; from < ids.size(); from += step) {
+                    int to = Math.min(ids.size(), from + step);
+                    db.execSQL(CompactionPoison.sqlFor("message", "id", to - from),
+                            ids.subList(from, to).toArray());
+                }
+                db.setTransactionSuccessful();
+            } finally {
+                db.endTransaction();
             }
-            for (int from = 0; from < ids.size(); from += step) {
-                int to = Math.min(ids.size(), from + step);
-                db.execSQL(CompactionPoison.sqlFor("message", "id", to - from),
-                        ids.subList(from, to).toArray());
-            }
+            ServerService.appendDiagStatic(appCtx, "context-repair-db-edited",
+                    "project store=" + f.getAbsolutePath() + " · victim ids=" + ids.size());
             return true;
         } catch (Throwable e) {
             Trail.record(appCtx, "hub store surgery", e);
+            ServerService.appendDiagStatic(appCtx, "context-repair-db-failed",
+                    e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()));
             return false;
         } finally {
             if (db != null) try { db.close(); } catch (Throwable ignored) {}
