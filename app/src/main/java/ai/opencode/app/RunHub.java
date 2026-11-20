@@ -1703,15 +1703,11 @@ public final class RunHub implements ServerService.EventListener {
      *  opencode.db (the SQLite store since the JSON-layout era ended). */
     private static java.io.File storeDbFile(Context c, File projectRoot)
             throws java.io.IOException {
-        if (projectRoot != null && projectRoot.isDirectory()) {
-            String key = Binaries.projectStorageKey(projectRoot);
-            File state = new File(new File(c.getFilesDir(), "project-state"), key);
-            return new File(new File(new File(state, "data"), "opencode"),
-                    "opencode.db");
-        }
-        // Compatibility fallback for sessions created before project-scoped
-        // storage was introduced. Current project sessions use the path above.
-        return new File(new File(Binaries.homeDir(c), ".local/share/opencode"),
+        if (projectRoot == null || !projectRoot.isDirectory())
+            throw new java.io.IOException("active project root is unavailable");
+        String key = Binaries.projectStorageKey(projectRoot);
+        File state = new File(new File(c.getFilesDir(), "project-state"), key);
+        return new File(new File(new File(state, "data"), "opencode"),
                 "opencode.db");
     }
 
@@ -1731,7 +1727,6 @@ public final class RunHub implements ServerService.EventListener {
             db = android.database.sqlite.SQLiteDatabase.openDatabase(
                     f.getPath(), null,
                     android.database.sqlite.SQLiteDatabase.OPEN_READWRITE);
-            db.execSQL("PRAGMA busy_timeout=5000");
             db.beginTransaction();
             try {
                 int step = CompactionPoison.SQL_BATCH;
