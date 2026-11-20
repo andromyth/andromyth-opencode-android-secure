@@ -4,30 +4,34 @@ This repository builds and maintains the Android application, its Android-specif
 
 ## Approved engine sources
 
-Future OpenCode engine and native-runtime work is restricted to these exact official repositories:
-
 - [anomalyco/opencode](https://github.com/anomalyco/opencode) — engine and CLI
-- [anomalyco/opentui](https://github.com/anomalyco/opentui) — terminal UI and native renderer
-- [anomalyco/opencode-pty](https://github.com/anomalyco/opencode-pty) — process and PTY runtime
+- [anomalyco/opentui](https://github.com/anomalyco/opentui) — native terminal renderer
+- [ghostty-org/ghostty](https://github.com/ghostty-org/ghostty) — PTY/VT native source pinned by OpenCode
+- [dmtrKovalenko/fff](https://github.com/dmtrKovalenko/fff) — engine's lockfile-pinned FFF native file-search dependency
+- [oven-sh/bun](https://github.com/oven-sh/bun) and [ziglang/zig](https://github.com/ziglang/zig) — pinned build tools
 
-**Unknown forks, unofficial mirrors, repackaged fork APKs and unverified native binaries are not allowed as engine sources.** CI runs `scripts/verify_upstream_policy.py` to enforce the repository allowlist and approved GitHub Actions.
+Unknown forks, unofficial mirrors, repackaged fork APKs and unverified engine binaries are not approved. CI runs `scripts/verify_upstream_policy.py` to enforce the exact source allowlist.
 
-## Current runtime status
+## Official Android source build
 
-The current CI build still carries a frozen legacy compatibility payload from `standalone-payload-v1`. That artifact is retained only so the existing app remains buildable while the official Android ARM64/Bionic runtime is developed. It is checksum-locked, cannot be used for new engine features, and is not evidence that the official-source migration is complete. The final target is an APK and native runtime built in this repository from pinned commits of the official sources.
+`OFFICIAL_ANDROID_BUILD.json` records the pinned source commits/tool versions. `scripts/port_official_android.py` applies only the app-owned Android/Bionic target and integration changes to pristine official source checkouts. The `official-source-android.yml` workflow builds the OpenCode CLI, PTY daemon and OpenTUI Android ARM64 renderer from source, packages them using the existing app asset contract, runs JVM tests, builds the APK and verifies its signature and hashes.
 
-## Build and checks
+The source-build job runs on every PR but skips the expensive compile when the PR does not change the engine source pins, Android port, native runtime integration, or source build workflow. Its job check is named `source-build`.
 
-The GitHub Actions workflow validates the upstream policy, builds the Android application, restores and verifies the frozen compatibility payload, runs JVM tests, builds the APK, verifies the APK signature and uploads the APK and reports as a workflow artifact.
+The APK is not a production release until physical Android ARM64 device testing is complete. The existing Android UI, settings, security controls, authentication and app integrations are preserved.
 
-Do not treat a compatibility APK as an official-source release. An official-source release additionally requires the build-from-source and physical-device release gates in [docs/UPSTREAM_POLICY.md](docs/UPSTREAM_POLICY.md).
+## Legacy rollback
+
+The current `standalone-payload-v1` runtime remains checksum-locked and frozen as compatibility-only fallback. It is not used to add engine features and does not qualify as an official-source build. The ordinary compatibility workflow still builds the existing app without changing that fallback.
+
+## Build and verification
+
+The compatibility workflow validates the source policy, runs JVM tests, builds the Android APK, verifies its signature and uploads reports. The official-source workflow additionally builds the CLI, PTY and OpenTUI native library from the pinned official source checkouts.
 
 ## Persistent signing (recommended)
 
-Optional repository secrets: `ANDROID_SIGNING_KEYSTORE_B64`, `ANDROID_SIGNING_STORE_PASSWORD`, `ANDROID_SIGNING_KEY_ALIAS`, and `ANDROID_SIGNING_KEY_PASSWORD`. Use a keystore you own; never commit it. Without these secrets, CI generates a one-run key, so later builds will not install as in-place updates over that APK.
+Optional repository secrets: `ANDROID_SIGNING_KEYSTORE_B64`, `ANDROID_SIGNING_STORE_PASSWORD`, `ANDROID_SIGNING_KEY_ALIAS`, and `ANDROID_SIGNING_KEY_PASSWORD`. Use a keystore you own; never commit it.
 
 ## Security limitations
 
-A successful build and signature check do not prove malware-free behavior. Agent/shell subprocesses may inherit the OpenCode server password environment variable; the hardening reduces unauthenticated loopback access but does not provide a strong app sandbox boundary.
-
-Do not treat an APK as verified unless the workflow passes and its APK, SHA-256, signing certificate, JVM test report and available security reports are inspected.
+A successful build and signature check do not prove malware-free behavior. Agent/shell subprocesses may inherit the OpenCode server password environment variable; hardening reduces unauthenticated loopback access but does not provide a strong app sandbox boundary.
