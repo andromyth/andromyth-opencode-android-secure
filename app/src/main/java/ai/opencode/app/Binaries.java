@@ -328,10 +328,20 @@ public final class Binaries {
         java.util.Map<String, String> e = pb.environment();
         e.put("HOME", home);
         e.put("TMPDIR", c.getCacheDir().getAbsolutePath());
-        // Official OpenTUI native core is extracted beside the CLI by the source-built runtime bundle.
-        File opentui = new File(c.getFilesDir(), "lib/libopentui.so");
-        if (opentui.isFile()) e.put("OPENTUI_LIB_PATH", opentui.getAbsolutePath());
-        else e.remove("OPENTUI_LIB_PATH");
+        // Official native runtime libraries are extracted into app-private storage with the CLI.
+        File nativeDir = new File(c.getFilesDir(), "lib");
+        if (nativeDir.isDirectory()) {
+            String inheritedLibraryPath = e.get("LD_LIBRARY_PATH");
+            e.put("LD_LIBRARY_PATH", nativeDir.getAbsolutePath()
+                    + ((inheritedLibraryPath == null || inheritedLibraryPath.isEmpty())
+                    ? "" : File.pathSeparator + inheritedLibraryPath));
+            File opentui = new File(nativeDir, "libopentui.so");
+            if (opentui.isFile()) e.put("OPENTUI_LIB_PATH", opentui.getAbsolutePath());
+            else e.remove("OPENTUI_LIB_PATH");
+            File fff = new File(nativeDir, "libfff_c.so");
+            if (fff.isFile()) e.put("FFF_C_LIB", fff.getAbsolutePath());
+            else e.remove("FFF_C_LIB");
+        }
         // Android Toybox first: this device's inherited seccomp policy kills
         // BusyBox applets. User-imported binaries and app shims remain available.
         // P42: build the CA bundle FIRST so shim generation can point at it.
