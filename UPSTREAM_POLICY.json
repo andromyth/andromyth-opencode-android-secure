@@ -1,10 +1,11 @@
 {
-  "policy_version": 1,
+  "policy_version": 2,
   "application_repository": "andromyth/andromyth-opencode-android-secure",
   "official_engine": {
     "repository": "anomalyco/opencode",
     "url": "https://github.com/anomalyco/opencode.git",
     "default_branch": "dev",
+    "commit": "b958fc84d73e34a2fa021c285cd38c6de674adb9",
     "allow_forks": false,
     "release_builds_require_pinned_commit": true
   },
@@ -13,25 +14,50 @@
       "repository": "anomalyco/opentui",
       "url": "https://github.com/anomalyco/opentui.git",
       "default_branch": "main",
-      "role": "Official terminal UI and native renderer"
+      "commit": "2738bc4b836e9db8bab1df8a7f1d5a5583ee51f1",
+      "role": "Official terminal UI and native renderer; build from source for Android ARM64"
     },
     {
-      "repository": "anomalyco/opencode-pty",
-      "url": "https://github.com/anomalyco/opencode-pty.git",
-      "default_branch": "master",
-      "role": "Official process and pseudoterminal runtime"
+      "repository": "ghostty-org/ghostty",
+      "url": "https://github.com/ghostty-org/ghostty.git",
+      "commit": "ab0b9da9e88fcb4b0533a1854e84628f663930af",
+      "role": "Pinned Ghostty VT source used by the official OpenCode PTY daemon build"
+    },
+    {
+      "repository": "dmtrKovalenko/fff",
+      "url": "https://github.com/dmtrKovalenko/fff.git",
+      "default_branch": "main",
+      "role": "Official FFF native file-search dependency; npm artifact locked by the official OpenCode bun.lock"
+    }
+  ],
+  "official_build_tools": [
+    {
+      "repository": "oven-sh/bun",
+      "url": "https://github.com/oven-sh/bun.git",
+      "release": "bun-v1.4.4",
+      "role": "Official Bun Android ARM64 runtime used to compile the OpenCode CLI"
+    },
+    {
+      "repository": "ziglang/zig",
+      "url": "https://github.com/ziglang/zig.git",
+      "version": "0.17.1",
+      "role": "Official Zig compiler used to build OpenTUI native renderer"
     }
   ],
   "approved_source_repositories": [
     "anomalyco/opencode",
     "anomalyco/opentui",
-    "anomalyco/opencode-pty"
+    "ghostty-org/ghostty",
+    "dmtrKovalenko/fff",
+    "oven-sh/bun",
+    "ziglang/zig"
   ],
   "approved_github_actions": [
     "actions/checkout",
     "actions/setup-java",
     "actions/upload-artifact",
-    "gradle/actions"
+    "gradle/actions",
+    "mlugg/setup-zig"
   ],
   "legacy_compatibility_payload": {
     "release_tag": "standalone-payload-v1",
@@ -40,7 +66,7 @@
     "status": "frozen_compatibility_only",
     "approved_for_engine_updates": false,
     "approved_for_new_features": false,
-    "note": "This is a frozen compatibility payload retained temporarily so the existing app remains buildable. It is not an approved upstream source and must not be modified, extended, or used as the basis for new engine features. Replace it only with an Android ARM64 runtime built and verified from the official repositories listed above."
+    "note": "Frozen compatibility artifact retained only until the official OpenCode CLI, PTY daemon and OpenTUI renderer are built from the pinned official sources. It is not an approved engine source and must not be modified, extended or used as the basis for new features."
   },
   "enforcement": {
     "unknown_or_forked_engine_repositories": "deny",
