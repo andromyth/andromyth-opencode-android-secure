@@ -120,6 +120,43 @@ def main() -> None:
         fail("compatibility build must fetch only the locked release asset from this repository")
     if digest not in workflow:
         fail("build workflow payload checksum does not match UPSTREAM_POLICY.json")
+
+    try:
+        build_manifest = json.loads((ROOT / "OFFICIAL_ANDROID_BUILD.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"cannot read OFFICIAL_ANDROID_BUILD.json: {exc}")
+
+    engine_pin = build_manifest.get("engine", {})
+    tui_pin = build_manifest.get("opentui", {})
+    pty_pin = build_manifest.get("pty", {})
+    bun_pin = build_manifest.get("bun", {})
+    fff_pin = build_manifest.get("fff", {})
+    if engine_pin.get("repository") != engine.get("repository") or engine_pin.get("commit") != engine.get("commit"):
+        fail("Android build manifest must use the exact official OpenCode repository and commit")
+    tui_dependency = next((x for x in deps if x.get("repository") == "anomalyco/opentui"), {})
+    ghostty_dependency = next((x for x in deps if x.get("repository") == "ghostty-org/ghostty"), {})
+    if tui_pin.get("repository") != "anomalyco/opentui" or tui_pin.get("commit") != tui_dependency.get("commit"):
+        fail("Android renderer must match the pinned OpenTUI dependency")
+    if pty_pin.get("ghostty_commit") != ghostty_dependency.get("commit"):
+        fail("Android PTY build must use the Ghostty revision pinned in official OpenCode")
+    if bun_pin.get("repository") != "oven-sh/bun" or bun_pin.get("release") != "bun-v1.4.4":
+        fail("Android CLI must use the approved, pinned Bun runtime")
+    if fff_pin.get("repository") != "dmtrKovalenko/fff" or fff_pin.get("version") != "0.10.5":
+        fail("Android file-search native package must match the official engine lockfile")
+
+    source_workflow_path = ROOT / ".github/workflows/official-source-android.yml"
+    if not source_workflow_path.is_file():
+        fail("official-source Android build workflow is missing")
+    source_workflow = source_workflow_path.read_text(encoding="utf-8")
+    for pin in (
+        engine_pin.get("commit", ""),
+        tui_pin.get("commit", ""),
+        pty_pin.get("api_level", 0).__str__(),
+        bun_pin.get("release", ""),
+    ):
+        if not pin or str(pin) not in source_workflow:
+            fail(f"official-source Android workflow is missing the pinned input {pin}")
+
     if (ROOT / ".github/workflows/vendor-upstream-source.yml").exists():
         fail("legacy source-vendoring workflow must not be reintroduced")
 
