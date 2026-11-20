@@ -36,5 +36,17 @@
   "target": "Android ARM64 / Bionic",
   "app_asset": "app/src/main/assets/oc_pkg.bin",
   "android_ndk": "27.2.12479018",
-  "android_api": 28
+  "android_api": 28,
+  "token_safety": {
+    "automatic_compaction_default": false,
+    "config_key": "compaction.auto",
+    "disabled_behavior": "skip automatic and overflow-triggered compaction; preserve original transcript and surface provider overflow",
+    "manual_compaction_when_disabled": "allowed only when the user explicitly requests it",
+    "app_boot_requirement": "write and verify the user-owned setting before spawning the OpenCode server",
+    "app_regression_tests": [
+      "P45Test",
+      "P42Test"
+    ],
+    "source_semantics_guard": "scripts/verify_token_safety.py"
+  }
 }
