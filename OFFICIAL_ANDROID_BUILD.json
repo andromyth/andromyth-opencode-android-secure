@@ -34,5 +34,7 @@
     "integrity": "sha512-idn1m9ycwv0Dzz6ih4H8e/X1WpGF6kglUxqP78oYgoC2sgAdPtLxD6hIAZK13p8isK7H8EMwrMze/4lynEDcKQ=="
   },
   "target": "Android ARM64 / Bionic",
-  "app_asset": "app/src/main/assets/oc_pkg.bin"
+  "app_asset": "app/src/main/assets/oc_pkg.bin",
+  "android_ndk": "27.2.12479018",
+  "android_api": 28
 }
