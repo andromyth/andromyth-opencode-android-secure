@@ -107,17 +107,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p app/src/main/assets
-          gh release download v0.52.0-p52 --repo turanmertkaraca-bit/opencode-android \
-            --pattern 'opencode-p52-v0.52.0-debug.apk' \
-            --output upstream-release.apk
-          echo "742fd845f589500d6279faaed38d2b9419bfa365c24ad70a8135f266275ca748  upstream-release.apk" | sha256sum -c -
-          unzip -l upstream-release.apk | grep -F 'assets/oc_pkg.bin'
-          unzip -p upstream-release.apk assets/oc_pkg.bin > app/src/main/assets/oc_pkg.bin
+          gh release download standalone-payload-v1 --repo "$GITHUB_REPOSITORY" \
+            --pattern 'oc_pkg.bin' \
+            --output app/src/main/assets/oc_pkg.bin
+          echo "6384e745af0ee988a6f51e8aa205c0d71b614e0bb100d22c4e535b355d673a7d  app/src/main/assets/oc_pkg.bin" | sha256sum -c -
           test -s app/src/main/assets/oc_pkg.bin
           test "$(od -An -tx1 -N2 app/src/main/assets/oc_pkg.bin | tr -d ' \\n')" = "1f8b"
-          sha256sum app/src/main/assets/oc_pkg.bin | tee native-payload-SHA256SUMS.txt
+          sha256sum app/src/main/assets/oc_pkg.bin
           ls -lh app/src/main/assets/oc_pkg.bin
-          rm upstream-release.apk
 
       - name: Run JVM tests (retry transient Robolectric downloads)
         shell: bash
