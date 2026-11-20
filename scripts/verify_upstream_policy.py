@@ -141,6 +141,9 @@ def main() -> None:
         fail("Android PTY build must use the Ghostty revision pinned in official OpenCode")
     if bun_pin.get("repository") != "oven-sh/bun" or bun_pin.get("release") != "bun-v1.4.4":
         fail("Android CLI must use the approved, pinned Bun runtime")
+    ndk_version = str(build_manifest.get("android_ndk", ""))
+    if ndk_version != "27.2.12479018" or ndk_version not in source_workflow:
+        fail("Android NDK must be pinned to the reviewed 27.2.12479018 toolchain")
     if fff_pin.get("repository") != "dmtrKovalenko/fff" or fff_pin.get("version") != "0.10.5":
         fail("Android file-search native package must match the official engine lockfile")
 
