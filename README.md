@@ -28,6 +28,6 @@ Optional repository secrets: `ANDROID_SIGNING_KEYSTORE_B64`, `ANDROID_SIGNING_ST
 
 ## Security limitations
 
-A clean ClamAV scan is not proof of malware-free behavior. Agent/shell subprocesses may inherit the OpenCode server password environment variable; the hardening reduces unauthenticated loopback access but does not provide a strong app sandbox boundary.
+A successful build and signature check do not prove malware-free behavior. Agent/shell subprocesses may inherit the OpenCode server password environment variable; the hardening reduces unauthenticated loopback access but does not provide a strong app sandbox boundary.
 
 Do not treat an APK as verified unless the workflow passes and its APK, SHA-256, signing certificate, JVM test report and available security reports are inspected.
