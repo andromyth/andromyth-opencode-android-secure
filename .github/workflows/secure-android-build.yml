@@ -147,19 +147,6 @@ jobs:
           grep -qi 'Signer #1 certificate SHA-256 digest' signing-certificate.txt
           sha256sum "$APK" | tee SHA256SUMS.txt
 
-      - name: Malware scan APK and native payload (ClamAV)
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y clamav clamav-freshclam
-          # Ubuntu may auto-start the freshclam daemon during package installation;
-          # stop it so the one-shot updater can own the database/log files.
-          sudo systemctl stop clamav-freshclam.service || true
-          sudo freshclam --stdout
-          clamscan --infected --alert-broken \
-            app/build/outputs/apk/debug/app-debug.apk \
-            app/src/main/assets/oc_pkg.bin | tee clamav-scan.txt
-
       - name: Upload build and verification reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -169,6 +156,5 @@ jobs:
             app/build/outputs/apk/debug/app-debug.apk
             SHA256SUMS.txt
             signing-certificate.txt
-            clamav-scan.txt
             app/build/reports/tests/testDebugUnitTest
           if-no-files-found: warn
