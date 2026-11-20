@@ -1098,17 +1098,6 @@ public final class Debian {
         return s.length() <= 2400 ? s : s.substring(s.length() - 2400);
     }
 
-    /** Pre-clone the project repo so "analyse the repo" works instantly. */
-    private static void cloneRepo(Context c) {
-        StringBuilder out = new StringBuilder();
-        runGuest(c,
-                "if [ ! -d /root/opencode-android/.git ]; then "
-                        + "git clone --depth 1 "
-                        + "https://github.com/turanmertkaraca-bit/opencode-android "
-                        + "/root/opencode-android 2>&1; fi",
-                out, 300);
-    }
-
     // ------------------------------------------------------------ assets
 
     private static void copyAssetExec(Context c, String name, File dst)
