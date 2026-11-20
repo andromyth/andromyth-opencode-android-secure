@@ -1699,8 +1699,8 @@ public final class RunHub implements ServerService.EventListener {
         return false;
     }
 
-    /** The store file the server owns: files/home/.local/share/opencode/
-     *  opencode.db (the SQLite store since the JSON-layout era ended). */
+    /** The store file owned by the active server project: files/project-state/
+     *  <project-hash>/data/opencode/opencode.db. */
     private static java.io.File storeDbFile(Context c, File projectRoot)
             throws java.io.IOException {
         if (projectRoot == null || !projectRoot.isDirectory())
