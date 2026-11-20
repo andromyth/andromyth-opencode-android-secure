@@ -51,6 +51,23 @@ def replace_once(path: Path, before: str, after: str, label: str) -> None:
 
 
 def patch_opencode(repo: Path) -> None:
+    ghostty_revision = (repo / "packages/process-daemon/ghostty-revision").read_text(encoding="utf-8").strip()
+    if ghostty_revision != MANIFEST["pty"]["ghostty_commit"]:
+        raise SystemExit(f"official OpenCode Ghostty pin changed: {ghostty_revision}")
+    rust_toolchain = (repo / "packages/process-daemon/rust-toolchain.toml").read_text(encoding="utf-8")
+    if f'channel = "{MANIFEST["pty"]["rust"]}"' not in rust_toolchain:
+        raise SystemExit("official OpenCode PTY Rust toolchain does not match the pinned Android build manifest")
+    root_package = json.loads((repo / "package.json").read_text(encoding="utf-8"))
+    if root_package.get("version") != MANIFEST["engine"]["version"]:
+        raise SystemExit("official OpenCode version does not match OFFICIAL_ANDROID_BUILD.json")
+    lock = (repo / "bun.lock").read_text(encoding="utf-8")
+    for locked_item in (
+        f'@ff-labs/fff-bin-android-arm64@{MANIFEST["fff"]["version"]}',
+        MANIFEST["fff"]["integrity"],
+    ):
+        if locked_item not in lock:
+            raise SystemExit(f"official OpenCode bun.lock is missing the pinned Android FFF item: {locked_item}")
+
     build = repo / "packages/cli/script/build.ts"
     replace_once(
         build,
@@ -181,6 +198,9 @@ def patch_opencode(repo: Path) -> None:
 
 
 def patch_opentui(repo: Path) -> None:
+    package = json.loads((repo / "packages/core/package.json").read_text(encoding="utf-8"))
+    if package.get("version") != MANIFEST["opentui"]["version"]:
+        raise SystemExit("OpenTUI source version does not match the engine-locked native dependency version")
     build = repo / "packages/native/build.zig"
     replace_once(
         build,
