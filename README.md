@@ -4,17 +4,13 @@ This repository builds and maintains the Android application, its Android-specif
 
 ## Approved engine sources
 
-Future OpenCode engine and native-runtime work is restricted to these exact official repositories:
+OpenCode engine and native-runtime work is restricted to these exact official repositories:
 
 - [anomalyco/opencode](https://github.com/anomalyco/opencode) — engine and CLI
 - [anomalyco/opentui](https://github.com/anomalyco/opentui) — terminal UI and native renderer
 - [anomalyco/opencode-pty](https://github.com/anomalyco/opencode-pty) — process and PTY runtime
 
-**Unknown forks, unofficial mirrors, repackaged fork APKs and unverified native binaries are not allowed as engine sources.** CI runs `scripts/verify_upstream_policy.py` to enforce the repository allowlist and approved GitHub Actions.
 
-## Current runtime status
-
-The current CI build still carries a frozen legacy compatibility payload from `standalone-payload-v1`. That artifact is retained only so the existing app remains buildable while the official Android ARM64/Bionic runtime is developed. It is checksum-locked, cannot be used for new engine features, and is not evidence that the official-source migration is complete. The final target is an APK and native runtime built in this repository from pinned commits of the official sources.
 
 ## Build and checks
 
