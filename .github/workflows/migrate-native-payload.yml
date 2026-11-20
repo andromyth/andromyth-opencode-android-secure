@@ -1,6 +1,10 @@
 name: One-time migration of native payload to this repository
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/migrate-native-payload.yml"
   workflow_dispatch:
 
 permissions:
