@@ -67,7 +67,7 @@ def main() -> None:
     engine = policy.get("official_engine", {})
     deps = policy.get("official_native_dependencies", [])
     approved = {str(x).lower() for x in policy.get("approved_source_repositories", [])}
-    expected = {"anomalyco/opencode", "anomalyco/opentui", "ghostty-org/ghostty", "dmtrKovalenko/fff", "oven-sh/bun", "ziglang/zig"}
+    expected = {"anomalyco/opencode", "anomalyco/opentui", "ghostty-org/ghostty", "dmtrkovalenko/fff", "oven-sh/bun", "ziglang/zig"}
 
     if engine.get("repository") != "anomalyco/opencode":
         fail("engine must be anomalyco/opencode")
@@ -82,7 +82,7 @@ def main() -> None:
     if not re.fullmatch(r"[0-9a-f]{40}", str(engine.get("commit", ""))):
         fail("official OpenCode source commit must be pinned to a full SHA")
     dep_repos = {str(x.get("repository", "")).lower() for x in deps}
-    if dep_repos != {"anomalyco/opentui", "ghostty-org/ghostty", "dmtrKovalenko/fff"}:
+    if dep_repos != {"anomalyco/opentui", "ghostty-org/ghostty", "dmtrkovalenko/fff"}:
         fail("native dependency allowlist must contain only the reviewed official OpenTUI, Ghostty and FFF sources")
     if approved != expected:
         fail("approved_source_repositories must exactly match the three official repositories")
