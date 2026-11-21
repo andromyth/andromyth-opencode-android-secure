@@ -223,9 +223,13 @@ def patch_opentui(repo: Path) -> None:
         '            module.linkSystemLibrary("m", .{});\n'
         '        },',
         '        .linux => {\n'
-        '            module.linkSystemLibrary("dl", .{});\n'
-        '            if (target.result.abi != .android) module.linkSystemLibrary("pthread", .{});\n'
-        '            module.linkSystemLibrary("m", .{});\n'
+        '            if (target.result.abi == .android) {\n'
+        '                const android_lib = b.graph.environ_map.get("ANDROID_LIB") orelse @panic("ANDROID_LIB is required for the Android OpenTUI build");\n'
+        '                module.addLibraryPath(.{ .cwd_relative = android_lib });\n'
+        '            }\n'
+        '            module.linkSystemLibrary("dl", .{ .use_pkg_config = .no });\n'
+        '            if (target.result.abi != .android) module.linkSystemLibrary("pthread", .{ .use_pkg_config = .no });\n'
+        '            module.linkSystemLibrary("m", .{ .use_pkg_config = .no });\n'
         '        },',
         "OpenTUI Android Bionic system libraries",
     )
