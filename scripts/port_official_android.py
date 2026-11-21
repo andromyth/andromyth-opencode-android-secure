@@ -68,6 +68,23 @@ def patch_opencode(repo: Path) -> None:
         if locked_item not in lock:
             raise SystemExit(f"official OpenCode bun.lock is missing the pinned Android FFF item: {locked_item}")
 
+    watcher_binding = repo / "packages/core/src/filesystem/watcher-binding.ts"
+    replace_once(
+        watcher_binding,
+        '  return require(\n'
+        '    process.env.OPENCODE_PARCEL_WATCHER_PATH ??\n'
+        '      `@parcel/watcher-${process.platform}-${process.arch}${process.platform === "linux" ? `-${libc || "glibc"}` : ""}`,\n'
+        '  )',
+        '  const platform = process.platform\n'
+        '  const arch = process.arch\n'
+        '  // Keep platform-specific native packages as runtime lookups. Android intentionally\n'
+        '  // has no Parcel watcher binary; Watcher.nativeLayer uses node:fs.watch for files\n'
+        '  // and entries and reports recursive directory watching as unsupported.\n'
+        '  const packageName = "@parcel/watcher-" + platform + "-" + arch + (platform === "linux" ? "-" + (libc || "glibc") : "")\n'
+        '  return require(process.env.OPENCODE_PARCEL_WATCHER_PATH ?? packageName)',
+        "OpenCode Android Parcel watcher runtime fallback",
+    )
+
     build = repo / "packages/cli/script/build.ts"
     replace_once(
         build,
