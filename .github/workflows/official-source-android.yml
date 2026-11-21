@@ -120,6 +120,7 @@ jobs:
           {
             echo "ANDROID_NDK=$NDK"
             echo "ANDROID_TOOLCHAIN=$TOOLCHAIN"
+            echo "ANDROID_LIB=$ANDROID_LIB"
             echo "ZIG_LIBC=$RUNNER_TEMP/android-libc.txt"
             echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN/bin/aarch64-linux-android28-clang"
             echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_AR=$TOOLCHAIN/bin/llvm-ar"
