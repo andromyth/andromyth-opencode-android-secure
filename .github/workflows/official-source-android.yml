@@ -162,7 +162,7 @@ jobs:
           sh scripts/prepare-zig-deps.sh
           test -e "$ANDROID_LIB/libdl.so"
           test -e "$ANDROID_LIB/libm.so"
-          zig build --libc "$ZIG_LIBC" --search-prefix "$ANDROID_LIB" -Dlibrary-target=aarch64-linux-android.28 -Doptimize=ReleaseFast -Dvideo=false
+          zig build --libc "$ZIG_LIBC" -Dlibrary-target=aarch64-linux-android.28 -Doptimize=ReleaseFast -Dvideo=false
           LIB="$PWD/lib/aarch64-android/libopentui.so"
           test -s "$LIB"
           readelf -h "$LIB" | grep -q 'AArch64'
