@@ -159,7 +159,7 @@ jobs:
         run: |
           set -euo pipefail
           sh scripts/prepare-zig-deps.sh
-          zig build -Dlibrary-target=aarch64-linux-android.28 -Doptimize=ReleaseFast -Dvideo=false
+          zig build --libc "$ZIG_LIBC" -Dlibrary-target=aarch64-linux-android.28 -Doptimize=ReleaseFast -Dvideo=false
           LIB="$PWD/lib/aarch64-android/libopentui.so"
           test -s "$LIB"
           readelf -h "$LIB" | grep -q 'AArch64'
