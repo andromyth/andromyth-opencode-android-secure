@@ -202,7 +202,7 @@ jobs:
           test -n "$FFF" && test -s "$FFF"
           readelf -h "$FFF" | grep -q 'AArch64'
           sha256sum "$FFF" | tee "$RUNNER_TEMP/fff.sha256"
-          echo "FFF_ANDROID_LIB=$FFF" >> "$GITHUB_ENV"
+          echo "FFF_ANDROID_LIB=$PWD/$FFF" >> "$GITHUB_ENV"
           LIBCXX="$ANDROID_TOOLCHAIN/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
           test -s "$LIBCXX"
           readelf -h "$LIBCXX" | grep -q 'AArch64'
