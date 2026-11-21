@@ -88,6 +88,12 @@ def patch_opencode(repo: Path) -> None:
     build = repo / "packages/cli/script/build.ts"
     replace_once(
         build,
+        '      contents: `export default () => require(${JSON.stringify(parcelWatcherPackage)})`,',
+        '      contents: item.os === "android"\n        ? \'export default () => { throw new Error("Parcel watcher is unavailable on Android") }\'\n        : `export default () => require(${JSON.stringify(parcelWatcherPackage)})`,',
+        "OpenCode CLI Android Parcel watcher build plugin",
+    )
+    replace_once(
+        build,
         '  { os: "linux", arch: "x64", abi: "musl", avx2: false },\n  { os: "darwin", arch: "arm64" },',
         '  { os: "linux", arch: "x64", abi: "musl", avx2: false },\n'
         '  { os: "android", arch: "arm64" },\n'
