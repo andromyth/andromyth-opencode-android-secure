@@ -120,6 +120,7 @@ jobs:
           {
             echo "ANDROID_NDK=$NDK"
             echo "ANDROID_TOOLCHAIN=$TOOLCHAIN"
+            echo "ANDROID_LIB=$ANDROID_LIB"
             echo "ZIG_LIBC=$RUNNER_TEMP/android-libc.txt"
             echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN/bin/aarch64-linux-android28-clang"
             echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_AR=$TOOLCHAIN/bin/llvm-ar"
@@ -159,7 +160,9 @@ jobs:
         run: |
           set -euo pipefail
           sh scripts/prepare-zig-deps.sh
-          zig build -Dlibrary-target=aarch64-linux-android.28 -Doptimize=ReleaseFast -Dvideo=false
+          test -e "$ANDROID_LIB/libdl.so"
+          test -e "$ANDROID_LIB/libm.so"
+          zig build --libc "$ZIG_LIBC" -Dlibrary-target=aarch64-linux-android.28 -Doptimize=ReleaseFast -Dvideo=false
           LIB="$PWD/lib/aarch64-android/libopentui.so"
           test -s "$LIB"
           readelf -h "$LIB" | grep -q 'AArch64'
@@ -199,7 +202,7 @@ jobs:
           test -n "$FFF" && test -s "$FFF"
           readelf -h "$FFF" | grep -q 'AArch64'
           sha256sum "$FFF" | tee "$RUNNER_TEMP/fff.sha256"
-          echo "FFF_ANDROID_LIB=$FFF" >> "$GITHUB_ENV"
+          echo "FFF_ANDROID_LIB=$PWD/$FFF" >> "$GITHUB_ENV"
           LIBCXX="$ANDROID_TOOLCHAIN/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
           test -s "$LIBCXX"
           readelf -h "$LIBCXX" | grep -q 'AArch64'
