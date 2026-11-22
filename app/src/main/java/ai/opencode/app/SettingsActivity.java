@@ -231,6 +231,13 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
                 "kernel · user · os · tools · storage · project bind",
                 "ⓘ", v -> runEnvCheck()));
         env.addView(divider());
+        env.addView(rowLink("Browser automation (accessibility)",
+                BrowserAutomationService.connected()
+                        ? "ON — open URLs, type, click in Chrome/other apps"
+                        : "OFF — enable in Settings → Accessibility → OpenCode",
+                "⚙", v -> startActivity(
+                new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))));
+        env.addView(divider());
         env.addView(rowLink("Network & LAN diagnostics",
                 "Wi-Fi AP scan · mDNS discovery · DNS servers · interfaces",
                 "⌁", v -> startActivity(new Intent(this, NetworkDiagnosticsActivity.class))));

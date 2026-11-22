@@ -295,5 +295,21 @@
             android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density|uiMode"
             android:label="Packet capture"/>
+
+        <!-- Accessibility service — lets the agent open URLs, type into
+             fields, and click elements in Chrome/other apps. The user must
+             enable it in Settings → Accessibility → OpenCode; the app cannot
+             flip that switch itself (Android OS boundary). -->
+        <service
+            android:name=".BrowserAutomationService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config"/>
+        </service>
     </application>
 </manifest>

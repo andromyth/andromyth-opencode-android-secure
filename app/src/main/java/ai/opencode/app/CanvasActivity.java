@@ -1,7 +1,9 @@
 package ai.opencode.app;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
@@ -125,14 +127,13 @@ public class CanvasActivity extends Activity {
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(
                     WebView v, String url) {
-                // a self-contained page has no business navigating away;
-                // external links are refused with one honest toast
+                // a self-contained page stays sandboxed (no network, no
+                // device files) — but an explicit http(s) link is opened in
+                // the system browser so the user can actually leave the
+                // canvas, matching desktop "open in browser" behavior.
                 if (url != null && (url.startsWith("http://")
                         || url.startsWith("https://"))) {
-                    Toast.makeText(CanvasActivity.this,
-                            "the page tried to open " + url
-                                    + " — external links stay inside the sandbox",
-                            Toast.LENGTH_LONG).show();
+                    openExternal(url);
                     return true;
                 }
                 return false;
@@ -192,6 +193,25 @@ public class CanvasActivity extends Activity {
         err.setVisibility(View.VISIBLE);
         root.addView(err, root.getChildCount());
         if (web != null) web.setVisibility(View.GONE);
+    }
+
+    /** Open an http(s) link in the system browser (Chrome etc.) outside the
+     *  app sandbox — the Android equivalent of "open in browser." Falls back
+     *  to an honest toast when no browser app resolves the intent. */
+    private void openExternal(String url) {
+        try {
+            Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (i.resolveActivity(getPackageManager()) != null) {
+                startActivity(i);
+            } else {
+                Toast.makeText(this, "no browser app to open " + url,
+                        Toast.LENGTH_LONG).show();
+            }
+        } catch (Exception e) {
+            Toast.makeText(this, "could not open " + url + ": " + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
+        }
     }
 
     @Override
