@@ -2590,6 +2590,27 @@ public final class RunHub implements ServerService.EventListener {
         }
     }
 
+    /**
+     * A successful revert changes the server's canonical message store, but
+     * the live Tx still contains the old user/assistant/tool rows. Drop only
+     * this session's cached transcript and replay the server history so the
+     * next send and the visible chat both start from the reverted state.
+     */
+    private static void refreshTranscriptAfterHistoryMutation(final String sid) {
+        main(() -> {
+            if (sid == null || !sid.equals(sessionId)) return;
+            synchronized (LOCK) {
+                archive.remove(sid);
+                cur = new Tx();
+                cur.sid = sid;
+            }
+            replayNeeded = false;
+            notifyReset();
+            notifySpend();
+            reconcileOnBind();
+        });
+    }
+
     // ------------------------------------------------ native slash commands
 
     /** Execute a native OpenCode slash command. Returns true when the input
@@ -2618,8 +2639,10 @@ public final class RunHub implements ServerService.EventListener {
             try {
                 if ("redo".equals(name)) {
                     Api.Resp r = Api.post("/session/" + sid + "/unrevert", "{}", 20_000);
-                    if (r.ok()) sys("↻ reverted changes restored");
-                    else sys(" /redo failed · HTTP " + r.status + " " + r.body);
+                    if (r.ok()) {
+                        refreshTranscriptAfterHistoryMutation(sid);
+                        sys("↻ reverted changes restored");
+                    } else sys(" /redo failed · HTTP " + r.status + " " + r.body);
                     return;
                 }
                 Api.Resp messages = Api.get("/session/" + sid + "/message?limit=100");
@@ -2643,8 +2666,10 @@ public final class RunHub implements ServerService.EventListener {
                 }
                 Api.Resp r = Api.post("/session/" + sid + "/revert",
                         "{\"messageID\":" + Json.quote(messageId) + "}", 30_000);
-                if (r.ok()) sys("↶ last user turn reverted; use /redo to restore it");
-                else sys("/undo failed · HTTP " + r.status + " " + r.body);
+                if (r.ok()) {
+                    refreshTranscriptAfterHistoryMutation(sid);
+                    sys("↶ last user turn reverted; use /redo to restore it");
+                } else sys("/undo failed · HTTP " + r.status + " " + r.body);
             } catch (Throwable e) {
                 sys("slash command failed · " + Resilience.prettyNetError(e));
             }
