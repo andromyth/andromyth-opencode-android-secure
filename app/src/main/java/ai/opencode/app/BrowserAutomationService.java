@@ -1,7 +1,6 @@
 package ai.opencode.app;
 
 import android.accessibilityservice.AccessibilityService;
-import android.accessibilityservice.AccessibilityServiceInfo;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
@@ -36,10 +35,6 @@ public class BrowserAutomationService extends AccessibilityService {
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
-        AccessibilityServiceInfo info = new AccessibilityServiceInfo();
-        info.eventTimeOut = 0;
-        info.flags = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOW;
-        setServiceInfo(info);
         SERVICE = new WeakReference<>(this);
         MAIN = new Handler(Looper.getMainLooper());
         BrowserAutomationBridge.onConnected(this);
@@ -48,11 +43,11 @@ public class BrowserAutomationService extends AccessibilityService {
     }
 
     @Override
-    public void onUnbind(Intent intent) {
+    public boolean onUnbind(Intent intent) {
         SERVICE = new WeakReference<>(null);
         MAIN = null;
         BrowserAutomationBridge.onDisconnected();
-        super.onUnbind(intent);
+        return super.onUnbind(intent);
     }
 
     @Override
