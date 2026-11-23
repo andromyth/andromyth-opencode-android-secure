@@ -1,6 +1,6 @@
 <accessibility-service
     xmlns:android="http://schemas.android.com/apk/res/android"
-    android:description="Browser automation — lets OpenCode open URLs, type into fields, and click elements in Chrome and other apps. You must turn this on in Settings > Accessibility > OpenCode before it works."
+    android:description="@string/accessibility_service_description"
     android:canRetrieveWindowContent="true"
     android:accessibilityEventTypes="typeWindowStateChanged|typeViewFocused|typeViewTextChanged|typeViewClicked|typeWindowContentChanged"
     android:notificationTimeout="100"

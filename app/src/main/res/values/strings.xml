@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">Browser automation — lets OpenCode open URLs, type into fields, and click elements in Chrome and other apps. Enable it in Settings → Accessibility → OpenCode.</string>
+</resources>
