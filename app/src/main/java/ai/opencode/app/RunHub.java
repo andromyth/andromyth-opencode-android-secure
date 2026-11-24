@@ -1684,6 +1684,36 @@ public final class RunHub implements ServerService.EventListener {
         });
     }
 
+    /**
+     * The server retains reverted messages in its raw message listing and
+     * exposes the active undo boundary on the Session object. Replay only the
+     * prefix before that boundary; a missing boundary in the bounded render
+     * window means the entire window is newer than the boundary.
+     */
+    private static String sessionRevertMessageId(String sid) {
+        try {
+            Api.Resp r = Api.get("/session/" + sid);
+            if (!r.ok()) return null;
+            Map<String, Object> session = Json.obj(Json.parse(r.body));
+            Map<String, Object> revert = Json.map(session, "revert");
+            return Json.str(revert, "messageID");
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static int replayLimitBeforeRevert(List<Map<String, Object>> items,
+                                                String revertMessageId) {
+        if (items == null) return 0;
+        if (revertMessageId == null) return items.size();
+        for (int i = 0; i < items.size(); i++) {
+            Map<String, Object> info = Json.map(items.get(i), "info");
+            if (info == null) info = items.get(i);
+            if (revertMessageId.equals(Json.str(info, "id"))) return i;
+        }
+        return 0;
+    }
+
     /** Bounded wait on a condition (the repair's own clock — 250 ms
      *  steps, capped). Named thread, no leaks, no indefinite hangs. */
     private static boolean awaitCondition(String what, long capMs,
@@ -3835,6 +3865,7 @@ public final class RunHub implements ServerService.EventListener {
                 // P51: streamed walk — same cure as reconcileOnBind; the
                 // whole-store parse that used to sit here was the other
                 // half of the field OOM (open a session → replay → heap).
+                final String revertMessageId = sessionRevertMessageId(id);
                 HttpURLConnection conn = Api.open("GET",
                         "/session/" + id + "/message", null, 120_000);
                 try {
@@ -3853,10 +3884,17 @@ public final class RunHub implements ServerService.EventListener {
                 StoreWalk.walk(in, REPLAY_RENDER, StoreWalk.KEEP_BYTES_DEFAULT,
                         new StoreWalk.Sink() {
                     @Override public boolean abort() { return !id.equals(sessionId); }
+                    final boolean[] pastRevertBoundary = {false};
                     @Override public void message(Map<String, Object> item, int index) {
                         anyMessage[0] = true;
                         Map<String, Object> info = Json.map(item, "info");
                         if (info == null) info = item;
+                        if (pastRevertBoundary[0]) return;
+                        if (revertMessageId != null
+                                && revertMessageId.equals(Json.str(info, "id"))) {
+                            pastRevertBoundary[0] = true;
+                            return;
+                        }
                         CompactionPoison.collectMsg(item, msgs);
                         if (Boolean.TRUE.equals(info.get("synthetic"))) return;
                         final Map<String, Object> finfo = info;   // lambda capture
@@ -3866,7 +3904,9 @@ public final class RunHub implements ServerService.EventListener {
                     @Override public void renderEnd(List<Map<String, Object>> items,
                                                     StoreWalk.Stats st) {
                         hiddenSeen[0] = st.hidden;
-                        for (Map<String, Object> item : items) {
+                        int renderLimit = replayLimitBeforeRevert(items, revertMessageId);
+                        for (int renderIndex = 0; renderIndex < renderLimit; renderIndex++) {
+                            Map<String, Object> item = items.get(renderIndex);
                             if (!id.equals(sessionId)) return;  // switched mid-replay
                             Map<String, Object> rinfo = Json.map(item, "info");
                             if (rinfo == null) rinfo = item;
@@ -3956,6 +3996,7 @@ public final class RunHub implements ServerService.EventListener {
             // message; only the bounded render ring survives in memory.
             HttpURLConnection conn = null;
             try {
+                final String revertMessageId = sessionRevertMessageId(id);
                 conn = Api.open("GET", "/session/" + id + "/message", null, 120_000);
                 int code = conn.getResponseCode();
                 if (code < 200 || code >= 300) {
@@ -3971,9 +4012,16 @@ public final class RunHub implements ServerService.EventListener {
                 StoreWalk.walk(in, REPLAY_RENDER, StoreWalk.KEEP_BYTES_DEFAULT,
                         new StoreWalk.Sink() {
                     @Override public boolean abort() { return !id.equals(sessionId); }
+                    final boolean[] pastRevertBoundary = {false};
                     @Override public void message(Map<String, Object> item, int index) {
                         Map<String, Object> info = Json.map(item, "info");
                         if (info == null) info = item;
+                        if (pastRevertBoundary[0]) return;
+                        if (revertMessageId != null
+                                && revertMessageId.equals(Json.str(info, "id"))) {
+                            pastRevertBoundary[0] = true;
+                            return;
+                        }
                         lastRaw[0] = info;
                         CompactionPoison.collectMsg(item, msgs);
                         if (Boolean.TRUE.equals(info.get("synthetic"))) return;
@@ -3984,7 +4032,9 @@ public final class RunHub implements ServerService.EventListener {
                     @Override public void renderEnd(List<Map<String, Object>> items,
                                                     StoreWalk.Stats st) {
                         hiddenSeen[0] = st.hidden;
-                        for (Map<String, Object> item : items) {
+                        int renderLimit = replayLimitBeforeRevert(items, revertMessageId);
+                        for (int renderIndex = 0; renderIndex < renderLimit; renderIndex++) {
+                            Map<String, Object> item = items.get(renderIndex);
                             if (!id.equals(sessionId)) return;  // switched mid-replay
                             Map<String, Object> rinfo = Json.map(item, "info");
                             if (rinfo == null) rinfo = item;
