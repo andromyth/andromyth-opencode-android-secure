@@ -3872,17 +3872,8 @@ public class ChatActivity extends Activity
                         ViewGroup.LayoutParams.WRAP_CONTENT));
                 continue;
             }
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-            boolean first = true;
+            FlowLayout row = new FlowLayout(this, 6, 6);
             for (final Questions.Opt o : p.options) {
-                if (!first) {
-                    View sp = new View(this);
-                    LinearLayout.LayoutParams spl = new LinearLayout.LayoutParams(dp(6), 1);
-                    row.addView(sp, spl);
-                }
-                first = false;
                 TextView chip = text(12, R.color.text_primary, false);
                 chip.setText(o.label);
                 chip.setBackground(Theme.outlinePill(this));
@@ -3916,9 +3907,7 @@ public class ChatActivity extends Activity
                         chip.setTextColor(Theme.cr(this, R.color.on_accent));
                     }
                 });
-                row.addView(chip, new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT));
+                row.addView(chip);
             }
             LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
