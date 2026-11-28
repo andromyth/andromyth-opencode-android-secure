@@ -48,7 +48,7 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
      *  P49 — the consistency release: no ANR on Settings/Diagnostics (the
      *  size walks left the main thread), the keyboard re-anchor, the
      *  once-and-quiet markdown finalize, bounded log reads. */
-    static final String VERSION_TAG = "0.52.0-p59";
+    static final String VERSION_TAG = "1.7";
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private LinearLayout root;
@@ -339,11 +339,11 @@ public class SettingsActivity extends Activity implements ServerService.Evt {
         ab.addView(rowLink("Version", VERSION_TAG + " · the find-and-manage release — a MIME-aware file manager that opens, shares, installs and exports real files instead of rendering every binary as text; an in-app storage manager that shows what is eating space and safely clears caches, logs and exports; bounded retention for every long-session collection; a smoother streaming paint; and deterministic signed builds that install in place", "◆", v -> {}));
         ab.addView(divider());
         ab.addView(rowLink("Source & releases",
-                "github.com/turanmertkaraca-bit/opencode-android", "⑂", v -> {
+                "github.com/andromyth/andromyth-opencode-android-secure", "⑂", v -> {
                     ClipboardManager cm =
                             (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
                     cm.setPrimaryClip(ClipData.newPlainText("repo",
-                            "https://github.com/turanmertkaraca-bit/opencode-android"));
+                            "https://github.com/andromyth/andromyth-opencode-android-secure"));
                     Toast.makeText(this, "URL copied", Toast.LENGTH_SHORT).show();
                 }));
         root.addView(ab);

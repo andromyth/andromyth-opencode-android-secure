@@ -252,8 +252,8 @@ public class P50Test {
     // ============ 4. the version
 
     @Test public void version_isP50() {
-        // P52 moved the tag forward; the pin rides the current release
-        assertEquals("0.52.0-p59", SettingsActivity.VERSION_TAG);
+        // The About screen and Android package metadata share this release label.
+        assertEquals("1.7", SettingsActivity.VERSION_TAG);
     }
 
     // ------------------------------------------------------------ helpers
